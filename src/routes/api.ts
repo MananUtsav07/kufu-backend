@@ -1,30 +1,44 @@
 import { Router, type NextFunction, type Request, type Response } from 'express'
 import type OpenAI from 'openai'
+import type { SupabaseClient } from '@supabase/supabase-js'
 
 import { demoLeadSchema, contactLeadSchema, chatSchema, chatLogSchema } from '../schemas/api.js'
 import { sanitizeMessages } from '../lib/sanitizeMessages.js'
 import { buildSystemPrompt } from '../lib/systemPrompt.js'
 import { getTimestamp, getClientIp, hashIp, respondValidationError } from '../lib/http.js'
 import type { DataStore } from '../lib/dataStore.js'
+import { createMailer } from '../lib/mailer.js'
+import { createAuthRouter } from './auth.js'
 
 type ApiRouterOptions = {
   nodeEnv: string
   isProduction: boolean
+  appUrl: string
   openAiApiKey: string
   openAiModel: string
   openAiClient: OpenAI | null
+  supabaseAdminClient: SupabaseClient | null
+  jwtSecret: string
+  emailUser: string
+  emailPass: string
   dataStore: DataStore
 }
 
 export function createApiRouter({
   nodeEnv,
   isProduction,
+  appUrl,
   openAiApiKey,
   openAiModel,
   openAiClient,
+  supabaseAdminClient,
+  jwtSecret,
+  emailUser,
+  emailPass,
   dataStore,
 }: ApiRouterOptions): Router {
   const router = Router()
+  const mailer = createMailer({ emailUser, emailPass })
 
   router.get('/health', (_req: Request, res: Response) => {
     return res.json({
@@ -33,6 +47,17 @@ export function createApiRouter({
       openaiKeyPresent: Boolean(openAiApiKey),
     })
   })
+
+  router.use(
+    '/auth',
+    createAuthRouter({
+      isProduction,
+      appUrl,
+      jwtSecret,
+      supabaseAdminClient,
+      mailer,
+    }),
+  )
 
   router.post('/leads/demo', async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -156,4 +181,3 @@ export function createApiRouter({
 
   return router
 }
-

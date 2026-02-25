@@ -2,21 +2,27 @@ import cors from 'cors'
 import express, { type NextFunction, type Request, type Response } from 'express'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import cookieParser from 'cookie-parser'
 
 import { KNOWLEDGE_PATH, loadKnowledge } from './lib/knowledge.js'
 import { createCorsOriginHandler } from './lib/corsOrigins.js'
 import { createDataStore } from './lib/dataStore.js'
 import { createApiRouter } from './routes/api.js'
 import {
+  appUrl,
   corsOrigins,
   dataDir,
+  emailPass,
+  emailUser,
   isProduction,
   isVercel,
+  jwtSecret,
   nodeEnv,
   openAiApiKey,
   openAiClient,
   openAiModel,
   port,
+  supabaseAdminClient,
 } from './config/runtime.js'
 
 const app = express()
@@ -27,6 +33,7 @@ const dataStore = createDataStore({
 
 app.use(express.json({ limit: '1mb' }))
 app.use(express.urlencoded({ extended: true }))
+app.use(cookieParser())
 app.set('trust proxy', 1)
 
 app.use((req: Request, res: Response, next: NextFunction) => {
@@ -50,9 +57,14 @@ app.use(
   createApiRouter({
     nodeEnv,
     isProduction,
+    appUrl,
     openAiApiKey,
     openAiModel,
     openAiClient,
+    supabaseAdminClient,
+    jwtSecret,
+    emailUser,
+    emailPass,
     dataStore,
   }),
 )

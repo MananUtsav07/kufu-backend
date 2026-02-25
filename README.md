@@ -13,6 +13,12 @@ Express + TypeScript API for leads and chat.
 
 - `OPENAI_API_KEY=`
 - `OPENAI_MODEL=gpt-4o-mini` (optional)
+- `SUPABASE_URL=`
+- `SUPABASE_SERVICE_ROLE_KEY=`
+- `JWT_SECRET=`
+- `EMAIL_USER=`
+- `EMAIL_PASS=`
+- `APP_URL=http://localhost:5173` (optional)
 - `PORT=8787`
 - `CORS_ORIGIN=http://localhost:5173,http://127.0.0.1:5173`
 - `DATA_DIR=data` (optional)
@@ -25,6 +31,11 @@ Express + TypeScript API for leads and chat.
 ### Routes
 
 - `GET /api/health`
+- `POST /api/auth/register`
+- `GET /api/auth/verify`
+- `POST /api/auth/login`
+- `GET /api/auth/me`
+- `POST /api/auth/logout`
 - `POST /api/chat`
 - `POST /api/chat/log`
 - `POST /api/leads/demo`
