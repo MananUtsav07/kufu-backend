@@ -52,6 +52,25 @@ function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/, '')
 }
 
+function resolveBackendBaseUrl(request: Request, isProduction: boolean): string {
+  const explicit =
+    process.env.BACKEND_BASE_URL?.trim() || process.env.API_BASE_URL?.trim() || ''
+  if (explicit) {
+    return trimTrailingSlash(explicit)
+  }
+
+  const forwardedHost = request.header('x-forwarded-host')?.split(',')[0]?.trim()
+  const host = forwardedHost || request.header('host')?.trim()
+  const forwardedProto = request.header('x-forwarded-proto')?.split(',')[0]?.trim()
+  const protocol = forwardedProto || (isProduction ? 'https' : request.protocol || 'http')
+
+  if (host) {
+    return `${protocol}://${host}`
+  }
+
+  return isProduction ? 'https://kufu-backend.vercel.app' : 'http://localhost:8787'
+}
+
 function asQueryParam(value: unknown): string | undefined {
   if (typeof value === 'string') {
     return value
@@ -336,9 +355,10 @@ export function createAuthRouter({
       }
 
       const base = trimTrailingSlash(appBaseUrl)
+      const backendBase = resolveBackendBaseUrl(request, isProduction)
       const query = new URLSearchParams({ token }).toString()
       const verificationUrl = `${base}/verify?${query}`
-      const fallbackVerificationUrl = `${base}/api/auth/verify?${query}`
+      const fallbackVerificationUrl = `${backendBase}/api/auth/verify?${query}`
 
       await authMailer.sendVerificationEmail({
         to: email,

@@ -27,8 +27,9 @@ export const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.tri
 export const jwtSecret = process.env.JWT_SECRET?.trim() ?? ''
 export const emailUser = process.env.EMAIL_USER?.trim() ?? ''
 export const emailPass = process.env.EMAIL_PASS?.trim() ?? ''
+const defaultAppBaseUrl = isProduction ? 'https://kufu-frontend.vercel.app' : 'http://localhost:5173'
 export const appBaseUrl =
-  process.env.APP_BASE_URL?.trim() || process.env.APP_URL?.trim() || 'http://localhost:5173'
+  process.env.APP_BASE_URL?.trim() || process.env.APP_URL?.trim() || defaultAppBaseUrl
 
 export const supabaseAdminClient = createSupabaseAdminClient({
   url: supabaseUrl,
