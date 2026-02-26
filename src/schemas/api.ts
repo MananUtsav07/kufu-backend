@@ -25,9 +25,20 @@ export const chatSchema = z
     metadata: z
       .object({
         page: z.string().trim().optional(),
+        client_id: z.string().uuid().optional(),
       })
       .optional(),
+    client_id: z.string().uuid().optional(),
     sessionId: z.string().trim().optional(),
+    lead: z
+      .object({
+        name: z.string().trim().optional(),
+        email: z.string().trim().email().optional(),
+        phone: z.string().trim().optional(),
+        need: z.string().trim().optional(),
+        client_id: z.string().uuid().optional(),
+      })
+      .optional(),
   })
   .strict()
 
@@ -48,4 +59,3 @@ export const chatLogSchema = z
       .min(1, 'At least one message is required'),
   })
   .strict()
-

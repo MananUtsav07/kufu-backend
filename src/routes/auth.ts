@@ -1,18 +1,20 @@
 import bcrypt from 'bcryptjs'
 import { randomBytes } from 'node:crypto'
-import { Router, type Request, type Response } from 'express'
+import { Router, type NextFunction, type Request, type Response } from 'express'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
-import { clearSessionCookie, createSessionToken, getUserFromRequest, setSessionCookie } from '../lib/authSession.js'
+import { authMiddleware, type AuthenticatedRequest } from '../lib/auth-middleware.js'
+import { getClientIp, respondValidationError } from '../lib/http.js'
+import { signAuthToken } from '../lib/jwt.js'
 import type { createMailer } from '../lib/mailer.js'
-import { loginSchema, registerSchema, verifyQuerySchema } from '../schemas/auth.js'
-import { respondValidationError } from '../lib/http.js'
+import { normalizeEmail } from '../lib/validation.js'
+import { loginSchema, registerSchema, verifyEmailSchema, verifyQuerySchema } from '../schemas/auth.js'
 
 type Mailer = ReturnType<typeof createMailer>
 
 type AuthRouterOptions = {
   isProduction: boolean
-  appUrl: string
+  appBaseUrl: string
   jwtSecret: string
   supabaseAdminClient: SupabaseClient | null
   mailer: Mailer
@@ -25,31 +27,29 @@ type UserRow = {
   is_verified: boolean
 }
 
-type UserSummaryRow = {
+type ClientRow = {
   id: string
-  email: string
-  is_verified: boolean
+  user_id: string
+  business_name: string
+  website_url: string | null
+  plan: string
 }
 
 type VerificationTokenRow = {
   id: string
   user_id: string
-  email: string
   token: string
   expires_at: string
 }
 
-function normalizeEmail(email: string): string {
-  return email.trim().toLowerCase()
+type RegisterUserRow = {
+  id: string
+  email: string
+  is_verified: boolean
 }
 
-function escapeHtml(input: string): string {
-  return input
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;')
+function trimTrailingSlash(value: string): string {
+  return value.replace(/\/+$/, '')
 }
 
 function asQueryParam(value: unknown): string | undefined {
@@ -64,61 +64,85 @@ function asQueryParam(value: unknown): string | undefined {
   return undefined
 }
 
-function trimTrailingSlash(value: string): string {
-  return value.replace(/\/+$/, '')
+function isTokenExpired(expiresAtIso: string): boolean {
+  const expiresAt = new Date(expiresAtIso).getTime()
+  return Number.isNaN(expiresAt) || expiresAt < Date.now()
 }
 
-function isExpired(expiresAtIso: string): boolean {
-  const timestamp = new Date(expiresAtIso).getTime()
-  return Number.isNaN(timestamp) || timestamp < Date.now()
+function createAuthRateLimiter({
+  windowMs,
+  maxRequests,
+}: {
+  windowMs: number
+  maxRequests: number
+}) {
+  const store = new Map<string, { count: number; resetAt: number }>()
+
+  return (request: Request, response: Response, next: NextFunction) => {
+    const ip = getClientIp(request)
+    const routeKey = `${request.method}:${request.path}`
+    const key = `${routeKey}:${ip}`
+    const now = Date.now()
+    const current = store.get(key)
+
+    if (!current || current.resetAt <= now) {
+      store.set(key, { count: 1, resetAt: now + windowMs })
+      next()
+      return
+    }
+
+    if (current.count >= maxRequests) {
+      response.status(429).json({
+        ok: false,
+        error: 'Too many auth requests. Please try again later.',
+      })
+      return
+    }
+
+    current.count += 1
+    store.set(key, current)
+    next()
+  }
 }
 
-function wantsJsonResponse(request: Request): boolean {
-  const format = asQueryParam(request.query.format)
-  if (format === 'json') {
-    return true
+function sendVerifyResponse(
+  response: Response,
+  status: number,
+  payload: { ok: boolean; message: string; appBaseUrl: string },
+) {
+  const acceptsJson = (response.req.headers.accept ?? '').includes('application/json')
+
+  if (acceptsJson) {
+    if (payload.ok) {
+      response.status(status).json({ ok: true, message: payload.message })
+    } else {
+      response.status(status).json({ ok: false, error: payload.message })
+    }
+    return
   }
 
-  const accept = request.header('accept') ?? ''
-  return accept.includes('application/json')
-}
-
-function sendVerifyHtml(
-  response: Response,
-  payload: { ok: boolean; title: string; message: string; appUrl: string },
-  status: number,
-) {
-  const { ok, title, message, appUrl } = payload
-  const safeTitle = escapeHtml(title)
-  const safeMessage = escapeHtml(message)
-  const loginUrl = `${trimTrailingSlash(appUrl)}/login`
-
+  const loginUrl = `${trimTrailingSlash(payload.appBaseUrl)}/login`
   const html = `<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>${safeTitle}</title>
-    ${ok ? `<meta http-equiv="refresh" content="2;url=${loginUrl}" />` : ''}
+    <title>Email Verification</title>
+    ${payload.ok ? `<meta http-equiv="refresh" content="2;url=${loginUrl}" />` : ''}
     <style>
-      body { margin: 0; font-family: Inter, Arial, sans-serif; background: #0b1024; color: #f8fafc; min-height: 100vh; display: grid; place-items: center; padding: 24px; }
-      .card { width: min(520px, 100%); border-radius: 16px; background: #121a38; border: 1px solid rgba(148,163,184,0.2); padding: 24px; box-shadow: 0 20px 50px rgba(0,0,0,0.35); }
-      h1 { margin: 0 0 12px; font-size: 24px; }
-      p { margin: 0 0 20px; color: #cbd5e1; line-height: 1.5; }
-      a { color: #60a5fa; text-decoration: none; }
-      .hint { font-size: 13px; color: #94a3b8; }
+      body{margin:0;min-height:100vh;display:grid;place-items:center;background:#101222;color:#e2e8f0;font-family:Inter,Arial,sans-serif;padding:24px}
+      .card{width:min(520px,100%);background:#0f172a;border:1px solid #334155;border-radius:16px;padding:24px}
+      h1{margin:0 0 12px;font-size:24px}
+      p{margin:0 0 16px;line-height:1.5;color:#cbd5e1}
+      a{color:#60a5fa;text-decoration:none}
     </style>
   </head>
   <body>
     <div class="card">
-      <h1>${safeTitle}</h1>
-      <p>${safeMessage}</p>
+      <h1>${payload.ok ? 'Email verified' : 'Verification failed'}</h1>
+      <p>${payload.message}</p>
       <a href="${loginUrl}">Go to login</a>
-      ${
-        ok
-          ? '<p class="hint">Redirecting to login in 2 seconds...</p>'
-          : '<p class="hint">You can request a new verification email from the create account page.</p>'
-      }
+      ${payload.ok ? '<p>Redirecting in 2 seconds...</p>' : ''}
     </div>
   </body>
 </html>`
@@ -126,33 +150,70 @@ function sendVerifyHtml(
   response.status(status).type('html').send(html)
 }
 
-function sendVerifyResponse(
-  request: Request,
+function ensureAuthDependencies(
   response: Response,
-  payload: { ok: boolean; title: string; message: string; appUrl: string },
-  status: number,
-) {
-  if (wantsJsonResponse(request)) {
-    if (payload.ok) {
-      response.status(status).json({ ok: true, message: payload.message })
-      return
-    }
-
-    response.status(status).json({ ok: false, error: payload.message })
-    return
+  options: {
+    supabaseAdminClient: SupabaseClient | null
+    jwtSecret: string
+    mailer: Mailer
+  },
+): options is {
+  supabaseAdminClient: SupabaseClient
+  jwtSecret: string
+  mailer: NonNullable<Mailer>
+} {
+  const missing: string[] = []
+  if (!options.supabaseAdminClient) {
+    missing.push('SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY')
+  }
+  if (!options.jwtSecret) {
+    missing.push('JWT_SECRET')
+  }
+  if (!options.mailer) {
+    missing.push('EMAIL_USER/EMAIL_PASS')
   }
 
-  sendVerifyHtml(response, payload, status)
+  if (missing.length > 0) {
+    response.status(500).json({
+      ok: false,
+      error: `Server auth configuration missing: ${missing.join(', ')}`,
+    })
+    return false
+  }
+
+  return true
+}
+
+async function fetchClientForUser(supabase: SupabaseClient, userId: string): Promise<ClientRow | null> {
+  const { data, error } = await supabase
+    .from('clients')
+    .select('id, user_id, business_name, website_url, plan')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .maybeSingle<ClientRow>()
+
+  if (error) {
+    throw new Error(`client_lookup_failed:${error.message}`)
+  }
+
+  return data ?? null
 }
 
 export function createAuthRouter({
   isProduction,
-  appUrl,
+  appBaseUrl,
   jwtSecret,
   supabaseAdminClient,
   mailer,
 }: AuthRouterOptions): Router {
   const router = Router()
+  const authLimiter = createAuthRateLimiter({
+    windowMs: 10 * 60 * 1000,
+    maxRequests: 30,
+  })
+
+  router.use(authLimiter)
 
   router.post('/register', async (request: Request, response: Response) => {
     const parsed = registerSchema.safeParse(request.body)
@@ -160,25 +221,23 @@ export function createAuthRouter({
       return respondValidationError(parsed.error, response)
     }
 
-    if (!supabaseAdminClient || !mailer) {
-      return response.status(500).json({
-        ok: false,
-        error: 'Server auth configuration missing: SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY or EMAIL_USER/EMAIL_PASS',
-      })
+    if (!ensureAuthDependencies(response, { supabaseAdminClient, jwtSecret, mailer })) {
+      return
     }
 
-    const supabase = supabaseAdminClient
-    const authMailer = mailer
-
+    const supabase = supabaseAdminClient as SupabaseClient
+    const authMailer = mailer as NonNullable<Mailer>
     const email = normalizeEmail(parsed.data.email)
     const passwordHash = await bcrypt.hash(parsed.data.password, 12)
+    const requestedBusinessName = parsed.data.business_name?.trim() || 'Kufu Client'
+    const requestedWebsiteUrl = parsed.data.website_url?.trim() || null
 
     try {
       const { data: existingUser, error: existingUserError } = await supabase
         .from('users')
         .select('id, email, is_verified')
         .eq('email', email)
-        .maybeSingle<UserSummaryRow>()
+        .maybeSingle<RegisterUserRow>()
 
       if (existingUserError) {
         console.error('[auth/register] existing user lookup failed:', existingUserError)
@@ -190,9 +249,8 @@ export function createAuthRouter({
       }
 
       let userId = existingUser?.id
-
       if (!userId) {
-        const { data: insertedUser, error: insertUserError } = await supabase
+        const { data: createdUser, error: createUserError } = await supabase
           .from('users')
           .insert({
             email,
@@ -202,12 +260,12 @@ export function createAuthRouter({
           .select('id')
           .single<{ id: string }>()
 
-        if (insertUserError || !insertedUser) {
-          console.error('[auth/register] insert user failed:', insertUserError)
+        if (createUserError || !createdUser) {
+          console.error('[auth/register] create user failed:', createUserError)
           return response.status(500).json({ ok: false, error: 'Failed to create user' })
         }
 
-        userId = insertedUser.id
+        userId = createdUser.id
       } else {
         const { error: updateUserError } = await supabase
           .from('users')
@@ -223,25 +281,53 @@ export function createAuthRouter({
         }
       }
 
-      const token = randomBytes(32).toString('hex')
+      const existingClient = await fetchClientForUser(supabase, userId)
+      if (!existingClient) {
+        const { error: createClientError } = await supabase.from('clients').insert({
+          user_id: userId,
+          business_name: requestedBusinessName,
+          website_url: requestedWebsiteUrl,
+          plan: 'starter',
+        })
+
+        if (createClientError) {
+          console.error('[auth/register] create client failed:', createClientError)
+          return response.status(500).json({ ok: false, error: 'Failed to create client' })
+        }
+      } else if (requestedBusinessName || requestedWebsiteUrl) {
+        const { error: updateClientError } = await supabase
+          .from('clients')
+          .update({
+            business_name: requestedBusinessName || existingClient.business_name,
+            website_url: requestedWebsiteUrl ?? existingClient.website_url,
+          })
+          .eq('id', existingClient.id)
+
+        if (updateClientError) {
+          console.error('[auth/register] update client failed:', updateClientError)
+          return response.status(500).json({ ok: false, error: 'Failed to update client' })
+        }
+      }
+
+      const token = randomBytes(24).toString('hex')
       const expiresInMinutes = 10
       const expiresAt = new Date(Date.now() + expiresInMinutes * 60 * 1000).toISOString()
 
-      const { error: deleteTokenError } = await supabase
+      const { error: removeOldTokensError } = await supabase
         .from('email_verification_tokens')
         .delete()
-        .eq('email', email)
+        .eq('user_id', userId)
 
-      if (deleteTokenError) {
-        console.error('[auth/register] delete old token failed:', deleteTokenError)
+      if (removeOldTokensError) {
+        console.error('[auth/register] delete old tokens failed:', removeOldTokensError)
         return response.status(500).json({ ok: false, error: 'Failed to rotate verification token' })
       }
 
       const { error: insertTokenError } = await supabase.from('email_verification_tokens').insert({
+        user_id: userId,
         email,
         token,
         expires_at: expiresAt,
-        user_id: userId,
       })
 
       if (insertTokenError) {
@@ -249,142 +335,69 @@ export function createAuthRouter({
         return response.status(500).json({ ok: false, error: 'Failed to create verification token' })
       }
 
-      const query = new URLSearchParams({ token, email }).toString()
-      const verificationUrl = `${trimTrailingSlash(appUrl)}/verify?${query}`
+      const base = trimTrailingSlash(appBaseUrl)
+      const query = new URLSearchParams({ token }).toString()
+      const verificationUrl = `${base}/verify?${query}`
+      const fallbackVerificationUrl = `${base}/api/auth/verify?${query}`
 
-      const forwardedProto = request.header('x-forwarded-proto')
-      const protocol = forwardedProto ? forwardedProto.split(',')[0].trim() : request.protocol
-      const host = request.get('host')
-      const backendBase = host ? `${protocol}://${host}` : trimTrailingSlash(appUrl)
-      const fallbackVerificationUrl = `${backendBase}/api/auth/verify?${query}`
+      await authMailer.sendVerificationEmail({
+        to: email,
+        verificationUrl,
+        fallbackVerificationUrl,
+        expiresInMinutes,
+      })
 
-      try {
-        await authMailer.sendVerificationEmail({
-          to: email,
-          verificationUrl,
-          fallbackVerificationUrl,
-          expiresInMinutes,
-        })
-      } catch (mailError) {
-        console.error('[auth/register] verification email failed:', mailError)
-        return response.status(500).json({ ok: false, error: 'Failed to send verification email' })
-      }
-
-      return response.json({ ok: true })
+      return response.status(201).json({ ok: true })
     } catch (error) {
       console.error('[auth/register] unexpected error:', error)
       return response.status(500).json({ ok: false, error: 'Server error while registering user' })
     }
   })
 
-  router.get('/verify', async (request: Request, response: Response) => {
+  router.post('/verify-email', async (request: Request, response: Response) => {
+    const parsed = verifyEmailSchema.safeParse(request.body)
+    if (!parsed.success) {
+      return respondValidationError(parsed.error, response)
+    }
+
     if (!supabaseAdminClient) {
-      return sendVerifyResponse(
-        request,
-        response,
-        {
-          ok: false,
-          title: 'Verification unavailable',
-          message: 'Server auth configuration is missing.',
-          appUrl,
-        },
-        500,
-      )
+      return response.status(500).json({
+        ok: false,
+        error: 'Server auth configuration missing: SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY',
+      })
     }
-
-    const token = asQueryParam(request.query.token)
-    const email = asQueryParam(request.query.email)
-    const parsedQuery = verifyQuerySchema.safeParse({
-      token,
-      email,
-    })
-
-    if (!parsedQuery.success) {
-      return sendVerifyResponse(
-        request,
-        response,
-        {
-          ok: false,
-          title: 'Invalid verification link',
-          message: 'The verification link is missing required fields.',
-          appUrl,
-        },
-        400,
-      )
-    }
-
-    const normalizedEmail = normalizeEmail(parsedQuery.data.email)
 
     try {
-      const { data: tokenRow, error: tokenError } = await supabaseAdminClient
+      const { data: tokenRow, error: tokenLookupError } = await supabaseAdminClient
         .from('email_verification_tokens')
-        .select('id, user_id, email, token, expires_at')
-        .eq('token', parsedQuery.data.token)
-        .eq('email', normalizedEmail)
+        .select('id, user_id, token, expires_at')
+        .eq('token', parsed.data.token)
         .maybeSingle<VerificationTokenRow>()
 
-      if (tokenError) {
-        console.error('[auth/verify] token lookup failed:', tokenError)
-        return sendVerifyResponse(
-          request,
-          response,
-          {
-            ok: false,
-            title: 'Verification failed',
-            message: 'Unable to verify this link right now.',
-            appUrl,
-          },
-          500,
-        )
+      if (tokenLookupError) {
+        console.error('[auth/verify-email] token lookup failed:', tokenLookupError)
+        return response.status(500).json({ ok: false, error: 'Failed to verify token' })
       }
 
       if (!tokenRow) {
-        return sendVerifyResponse(
-          request,
-          response,
-          {
-            ok: false,
-            title: 'Invalid verification link',
-            message: 'This verification link is invalid or has already been used.',
-            appUrl,
-          },
-          400,
-        )
+        return response.status(400).json({ ok: false, error: 'Invalid verification token' })
       }
 
-      if (isExpired(tokenRow.expires_at)) {
+      if (isTokenExpired(tokenRow.expires_at)) {
         await supabaseAdminClient.from('email_verification_tokens').delete().eq('id', tokenRow.id)
-        return sendVerifyResponse(
-          request,
-          response,
-          {
-            ok: false,
-            title: 'Verification link expired',
-            message: 'This verification link has expired. Please request a new one.',
-            appUrl,
-          },
-          400,
-        )
+        return response.status(400).json({ ok: false, error: 'Verification token expired' })
       }
 
-      const { error: updateUserError } = await supabaseAdminClient
+      const { error: verifyUserError } = await supabaseAdminClient
         .from('users')
-        .update({ is_verified: true })
+        .update({
+          is_verified: true,
+        })
         .eq('id', tokenRow.user_id)
 
-      if (updateUserError) {
-        console.error('[auth/verify] user verify update failed:', updateUserError)
-        return sendVerifyResponse(
-          request,
-          response,
-          {
-            ok: false,
-            title: 'Verification failed',
-            message: 'Could not activate your account. Please try again.',
-            appUrl,
-          },
-          500,
-        )
+      if (verifyUserError) {
+        console.error('[auth/verify-email] verify user failed:', verifyUserError)
+        return response.status(500).json({ ok: false, error: 'Failed to verify user' })
       }
 
       const { error: deleteTokenError } = await supabaseAdminClient
@@ -393,44 +406,108 @@ export function createAuthRouter({
         .eq('id', tokenRow.id)
 
       if (deleteTokenError) {
-        console.error('[auth/verify] token cleanup failed:', deleteTokenError)
-        return sendVerifyResponse(
-          request,
-          response,
-          {
-            ok: false,
-            title: 'Verification failed',
-            message: 'Your account was updated, but cleanup failed. Please try signing in.',
-            appUrl,
-          },
-          500,
-        )
+        console.error('[auth/verify-email] delete token failed:', deleteTokenError)
+        return response.status(500).json({ ok: false, error: 'Failed to clean verification token' })
       }
 
-      return sendVerifyResponse(
-        request,
-        response,
-        {
-          ok: true,
-          title: 'Email verified',
-          message: 'Your email was verified successfully.',
-          appUrl,
-        },
-        200,
-      )
+      return response.json({ ok: true })
+    } catch (error) {
+      console.error('[auth/verify-email] unexpected error:', error)
+      return response.status(500).json({ ok: false, error: 'Server error while verifying email' })
+    }
+  })
+
+  router.get('/verify', async (request: Request, response: Response) => {
+    const token = asQueryParam(request.query.token)
+    const email = asQueryParam(request.query.email)
+    const parsed = verifyQuerySchema.safeParse({ token, email })
+    if (!parsed.success) {
+      return sendVerifyResponse(response, 400, {
+        ok: false,
+        message: 'Invalid verification link.',
+        appBaseUrl,
+      })
+    }
+
+    const parsedBody = verifyEmailSchema.safeParse({
+      token: parsed.data.token,
+    })
+    if (!parsedBody.success) {
+      return sendVerifyResponse(response, 400, {
+        ok: false,
+        message: 'Invalid verification token.',
+        appBaseUrl,
+      })
+    }
+
+    if (!supabaseAdminClient) {
+      return sendVerifyResponse(response, 500, {
+        ok: false,
+        message: 'Server configuration missing.',
+        appBaseUrl,
+      })
+    }
+
+    try {
+      const { data: tokenRow, error: tokenLookupError } = await supabaseAdminClient
+        .from('email_verification_tokens')
+        .select('id, user_id, token, expires_at')
+        .eq('token', parsedBody.data.token)
+        .maybeSingle<VerificationTokenRow>()
+
+      if (tokenLookupError) {
+        console.error('[auth/verify] token lookup failed:', tokenLookupError)
+        return sendVerifyResponse(response, 500, {
+          ok: false,
+          message: 'Unable to verify token right now.',
+          appBaseUrl,
+        })
+      }
+
+      if (!tokenRow) {
+        return sendVerifyResponse(response, 400, {
+          ok: false,
+          message: 'Invalid verification token.',
+          appBaseUrl,
+        })
+      }
+
+      if (isTokenExpired(tokenRow.expires_at)) {
+        await supabaseAdminClient.from('email_verification_tokens').delete().eq('id', tokenRow.id)
+        return sendVerifyResponse(response, 400, {
+          ok: false,
+          message: 'Verification token expired.',
+          appBaseUrl,
+        })
+      }
+
+      const { error: verifyUserError } = await supabaseAdminClient
+        .from('users')
+        .update({ is_verified: true })
+        .eq('id', tokenRow.user_id)
+
+      if (verifyUserError) {
+        console.error('[auth/verify] verify user failed:', verifyUserError)
+        return sendVerifyResponse(response, 500, {
+          ok: false,
+          message: 'Could not verify account.',
+          appBaseUrl,
+        })
+      }
+
+      await supabaseAdminClient.from('email_verification_tokens').delete().eq('id', tokenRow.id)
+      return sendVerifyResponse(response, 200, {
+        ok: true,
+        message: 'Email verified successfully.',
+        appBaseUrl,
+      })
     } catch (error) {
       console.error('[auth/verify] unexpected error:', error)
-      return sendVerifyResponse(
-        request,
-        response,
-        {
-          ok: false,
-          title: 'Verification failed',
-          message: 'Unexpected server error. Please try again.',
-          appUrl,
-        },
-        500,
-      )
+      return sendVerifyResponse(response, 500, {
+        ok: false,
+        message: 'Unexpected server error.',
+        appBaseUrl,
+      })
     }
   })
 
@@ -467,56 +544,78 @@ export function createAuthRouter({
       }
 
       if (!user.is_verified) {
-        return response.status(403).json({ ok: false, error: 'Please verify your email' })
+        return response.status(403).json({ ok: false, error: 'Email not verified' })
       }
 
-      const isPasswordValid = await bcrypt.compare(password, user.password_hash)
-      if (!isPasswordValid) {
+      const passwordMatches = await bcrypt.compare(password, user.password_hash)
+      if (!passwordMatches) {
         return response.status(401).json({ ok: false, error: 'Invalid email or password' })
       }
 
-      const token = createSessionToken(
+      const client = await fetchClientForUser(supabaseAdminClient, user.id)
+      if (!client) {
+        return response.status(500).json({ ok: false, error: 'Client profile missing for user' })
+      }
+
+      if (client.user_id !== user.id) {
+        return response.status(403).json({ ok: false, error: 'Client ownership mismatch' })
+      }
+
+      const token = signAuthToken(
         {
-          sub: user.id,
+          userId: user.id,
           email: user.email,
+          clientId: client.id,
         },
         jwtSecret,
       )
 
-      setSessionCookie(response, token, isProduction)
+      response.cookie('kufu_session', token, {
+        httpOnly: true,
+        sameSite: 'lax',
+        secure: isProduction,
+        path: '/',
+        maxAge: 7 * 24 * 60 * 60 * 1000,
+      })
 
       return response.json({
         ok: true,
+        token,
         user: {
           id: user.id,
           email: user.email,
+          is_verified: user.is_verified,
+        },
+        client: {
+          id: client.id,
+          business_name: client.business_name,
+          website_url: client.website_url,
+          plan: client.plan,
         },
       })
     } catch (error) {
       console.error('[auth/login] unexpected error:', error)
-      return response.status(500).json({ ok: false, error: 'Server error while signing in' })
+      return response.status(500).json({ ok: false, error: 'Server error while logging in' })
     }
   })
 
-  router.get('/me', async (request: Request, response: Response) => {
-    if (!supabaseAdminClient || !jwtSecret) {
+  router.get('/me', authMiddleware(jwtSecret), async (request: Request, response: Response) => {
+    if (!supabaseAdminClient) {
       return response.status(500).json({
         ok: false,
-        error: 'Server auth configuration missing: SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY or JWT_SECRET',
+        error: 'Server auth configuration missing: SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY',
       })
     }
 
-    const sessionUser = getUserFromRequest(request, jwtSecret)
-    if (!sessionUser) {
-      return response.status(401).json({ ok: false, error: 'Unauthorized' })
-    }
+    const authRequest = request as AuthenticatedRequest
+    const { userId, clientId } = authRequest.user
 
     try {
       const { data: user, error: userError } = await supabaseAdminClient
         .from('users')
         .select('id, email, is_verified')
-        .eq('id', sessionUser.sub)
-        .maybeSingle<UserSummaryRow>()
+        .eq('id', userId)
+        .maybeSingle<RegisterUserRow>()
 
       if (userError) {
         console.error('[auth/me] user lookup failed:', userError)
@@ -527,22 +626,50 @@ export function createAuthRouter({
         return response.status(401).json({ ok: false, error: 'Unauthorized' })
       }
 
+      const { data: client, error: clientError } = await supabaseAdminClient
+        .from('clients')
+        .select('id, user_id, business_name, website_url, plan')
+        .eq('id', clientId)
+        .eq('user_id', userId)
+        .maybeSingle<ClientRow>()
+
+      if (clientError) {
+        console.error('[auth/me] client lookup failed:', clientError)
+        return response.status(500).json({ ok: false, error: 'Failed to query client' })
+      }
+
+      if (!client) {
+        return response.status(401).json({ ok: false, error: 'Unauthorized' })
+      }
+
       return response.json({
         ok: true,
         user: {
           id: user.id,
           email: user.email,
-          isVerified: Boolean(user.is_verified),
+          is_verified: user.is_verified,
+        },
+        client: {
+          id: client.id,
+          business_name: client.business_name,
+          website_url: client.website_url,
+          plan: client.plan,
         },
       })
     } catch (error) {
       console.error('[auth/me] unexpected error:', error)
-      return response.status(500).json({ ok: false, error: 'Server error while loading user' })
+      return response.status(500).json({ ok: false, error: 'Server error while loading profile' })
     }
   })
 
   router.post('/logout', (_request: Request, response: Response) => {
-    clearSessionCookie(response, isProduction)
+    response.clearCookie('kufu_session', {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: isProduction,
+      path: '/',
+    })
+
     return response.json({ ok: true })
   })
 

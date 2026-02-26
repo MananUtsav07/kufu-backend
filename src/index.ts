@@ -9,7 +9,7 @@ import { createCorsOriginHandler } from './lib/corsOrigins.js'
 import { createDataStore } from './lib/dataStore.js'
 import { createApiRouter } from './routes/api.js'
 import {
-  appUrl,
+  appBaseUrl,
   corsOrigins,
   dataDir,
   emailPass,
@@ -57,7 +57,7 @@ app.use(
   createApiRouter({
     nodeEnv,
     isProduction,
-    appUrl,
+    appBaseUrl,
     openAiApiKey,
     openAiModel,
     openAiClient,

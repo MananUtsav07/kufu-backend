@@ -1,7 +1,8 @@
 import dotenv from 'dotenv'
 import OpenAI from 'openai'
 import path from 'node:path'
-import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+
+import { createSupabaseAdminClient } from '../lib/supabase.js'
 
 dotenv.config({ path: path.resolve(process.cwd(), '.env') })
 
@@ -26,19 +27,17 @@ export const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.tri
 export const jwtSecret = process.env.JWT_SECRET?.trim() ?? ''
 export const emailUser = process.env.EMAIL_USER?.trim() ?? ''
 export const emailPass = process.env.EMAIL_PASS?.trim() ?? ''
-export const appUrl = process.env.APP_URL?.trim() || 'http://localhost:5173'
+export const appBaseUrl =
+  process.env.APP_BASE_URL?.trim() || process.env.APP_URL?.trim() || 'http://localhost:5173'
 
-export const supabaseAdminClient: SupabaseClient | null =
-  supabaseUrl && supabaseServiceRoleKey
-    ? createClient(supabaseUrl, supabaseServiceRoleKey, {
-        auth: {
-          persistSession: false,
-          autoRefreshToken: false,
-        },
-      })
-    : null
+export const supabaseAdminClient = createSupabaseAdminClient({
+  url: supabaseUrl,
+  serviceRoleKey: supabaseServiceRoleKey,
+})
 
-export const corsOrigins = (process.env.CORS_ORIGIN ?? 'http://localhost:5173,http://127.0.0.1:5173')
+export const corsOrigins = (
+  process.env.ALLOWED_ORIGINS ?? process.env.CORS_ORIGIN ?? 'http://localhost:5173,http://127.0.0.1:5173'
+)
   .split(',')
   .map((origin) => origin.trim())
   .filter(Boolean)

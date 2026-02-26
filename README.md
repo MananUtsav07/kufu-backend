@@ -1,6 +1,6 @@
 # Kufu Backend
 
-Express + TypeScript API for leads and chat.
+Express + TypeScript API for auth, dashboard, leads, and chat.
 
 ## Scripts
 
@@ -18,9 +18,9 @@ Express + TypeScript API for leads and chat.
 - `JWT_SECRET=`
 - `EMAIL_USER=`
 - `EMAIL_PASS=`
-- `APP_URL=http://localhost:5173` (optional)
+- `APP_BASE_URL=http://localhost:5173` (optional)
 - `PORT=8787`
-- `CORS_ORIGIN=http://localhost:5173,http://127.0.0.1:5173`
+- `ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173`
 - `DATA_DIR=data` (optional)
 
 ## Vercel (Backend Project)
@@ -33,13 +33,28 @@ Express + TypeScript API for leads and chat.
 - `GET /api/health`
 - `POST /api/auth/register`
 - `GET /api/auth/verify`
+- `POST /api/auth/verify-email`
 - `POST /api/auth/login`
 - `GET /api/auth/me`
 - `POST /api/auth/logout`
+- `GET /api/dashboard/metrics`
+- `GET /api/dashboard/leads`
+- `PATCH /api/dashboard/leads/:id`
+- `POST /api/dashboard/knowledge`
+- `GET /api/dashboard/knowledge`
+- `GET /api/widget/config`
 - `POST /api/chat`
 - `POST /api/chat/log`
 - `POST /api/leads/demo`
 - `POST /api/leads/contact`
+
+## Supabase SQL
+
+Run:
+
+- `supabase.sql`
+
+in the Supabase SQL editor to create/align tables and RLS policies for the dashboard MVP.
 
 ## Data
 
