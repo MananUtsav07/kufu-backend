@@ -68,6 +68,7 @@ export const ragIngestStartSchema = z
     chatbotId: z.string().uuid(),
     websiteUrl: z.string().trim().url(),
     maxPages: z.coerce.number().int().min(1).max(200).optional().default(60),
+    urls: z.array(z.string().trim().url()).max(200).optional().default([]),
   })
   .strict()
 
@@ -86,5 +87,6 @@ export const ragIngestResyncSchema = z
     chatbotId: z.string().uuid(),
     websiteUrl: z.string().trim().url().optional(),
     maxPages: z.coerce.number().int().min(1).max(200).optional().default(60),
+    urls: z.array(z.string().trim().url()).max(200).optional().default([]),
   })
   .strict()

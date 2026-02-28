@@ -20,6 +20,7 @@ type StartJobInput = {
   chatbotId: string
   websiteUrl: string
   maxPages: number
+  urls?: string[]
   userId: string
   isResync: boolean
 }
@@ -185,6 +186,7 @@ class RagIngestionManager {
       const urls = await discoverWebsiteUrls({
         websiteUrl: input.websiteUrl,
         maxPages: input.maxPages,
+        seedUrls: input.urls ?? [],
         fetchTimeoutMs: FETCH_TIMEOUT_MS,
       })
 
@@ -303,6 +305,11 @@ class RagIngestionManager {
       }
 
       const isCanceled = completed.cancelRequested || (await this.shouldStop(runId))
+      if (completed.pagesCrawled === 0) {
+        console.error(
+          `[rag] ingestion run ${runId} finished with 0 crawled pages. websiteUrl=${input.websiteUrl} pagesFound=${completed.pagesFound}`,
+        )
+      }
       const finished: JobState = {
         ...completed,
         status: isCanceled ? 'canceled' : 'done',

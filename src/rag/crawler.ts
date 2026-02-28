@@ -1,3 +1,4 @@
+import axios from 'axios'
 import * as cheerio from 'cheerio'
 import type { Browser } from 'playwright'
 
@@ -10,6 +11,7 @@ export type CrawledPage = {
 
 type CrawlDiscoveryOptions = {
   websiteUrl: string
+  seedUrls?: string[]
   maxPages: number
   fetchTimeoutMs?: number
 }
@@ -17,6 +19,12 @@ type CrawlDiscoveryOptions = {
 type FetchPageOptions = {
   url: string
   fetchTimeoutMs?: number
+}
+
+type HttpPageResponse = {
+  status: number
+  contentType: string
+  html: string
 }
 
 const blockedPathFragments = [
@@ -49,9 +57,9 @@ const skipExtensions = new Set([
   '.mp3',
 ])
 
-const jsRenderEnabled = process.env.RAG_JS_RENDER !== 'false'
+const playwrightEnabled = process.env.ENABLE_PLAYWRIGHT === 'true'
 const jsRenderTimeoutMs = Number(process.env.RAG_JS_RENDER_TIMEOUT_MS ?? 15_000)
-const minimumUsefulTextLength = 120
+const thinContentThreshold = 300
 
 let browserPromise: Promise<Browser | null> | null = null
 
@@ -97,21 +105,36 @@ function extractLocTags(xml: string): string[] {
   return matches.map((item) => item[1]?.trim()).filter((value): value is string => Boolean(value))
 }
 
-async function fetchWithTimeout(url: string, timeoutMs = 12_000): Promise<Response> {
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), timeoutMs)
-  try {
-    return await fetch(url, {
-      signal: controller.signal,
-      redirect: 'follow',
-      headers: {
-        'user-agent': 'KufuBot/1.0 (+https://kufu.ai)',
-        accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      },
-    })
-  } finally {
-    clearTimeout(timeout)
+async function fetchHtmlWithAxios(url: string, timeoutMs = 12_000): Promise<HttpPageResponse> {
+  const response = await axios.get<string>(url, {
+    timeout: timeoutMs,
+    maxRedirects: 5,
+    responseType: 'text',
+    headers: {
+      'user-agent': 'KufuBot/1.0 (+https://kufu.ai)',
+      accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    },
+    validateStatus: () => true,
+  })
+
+  return {
+    status: response.status,
+    contentType: String(response.headers['content-type'] ?? ''),
+    html: typeof response.data === 'string' ? response.data : '',
   }
+}
+
+function logPageEvent(args: {
+  url: string
+  status: number
+  contentType: string
+  extractedLen: number
+  usedFallback: boolean
+  skipReason: string | null
+}) {
+  console.info(
+    `[rag] page url=${args.url} status=${args.status} content-type="${args.contentType || 'unknown'}" extractedLen=${args.extractedLen} usedFallback=${args.usedFallback} skipReason=${args.skipReason ?? 'none'}`,
+  )
 }
 
 async function fetchSitemapUrls(rootUrl: string, fetchTimeoutMs: number): Promise<string[]> {
@@ -121,30 +144,38 @@ async function fetchSitemapUrls(rootUrl: string, fetchTimeoutMs: number): Promis
   }
 
   try {
-    const response = await fetchWithTimeout(sitemapUrl, fetchTimeoutMs)
-    if (!response.ok) {
+    const response = await axios.get<string>(sitemapUrl, {
+      timeout: fetchTimeoutMs,
+      responseType: 'text',
+      validateStatus: () => true,
+      headers: {
+        'user-agent': 'KufuBot/1.0 (+https://kufu.ai)',
+        accept: 'application/xml,text/xml;q=0.9,*/*;q=0.8',
+      },
+    })
+
+    if (response.status < 200 || response.status >= 300) {
       return []
     }
 
-    const xml = await response.text()
-    const locs = extractLocTags(xml)
-    return locs
+    const xml = typeof response.data === 'string' ? response.data : ''
+    return extractLocTags(xml)
   } catch {
     return []
   }
 }
 
 async function getPlaywrightBrowser(): Promise<Browser | null> {
-  if (!jsRenderEnabled) return null
+  if (!playwrightEnabled) {
+    return null
+  }
 
   if (!browserPromise) {
     browserPromise = (async () => {
       try {
-        const chromium = await import('@sparticuz/chromium')
-        const { chromium: playwrightChromium } = await import('playwright-core')
-        const browser = await playwrightChromium.launch({
-          args: chromium.default.args,
-          executablePath: await chromium.default.executablePath(),
+        const playwright = await import('playwright')
+        const browser = await playwright.chromium.launch({
+          args: ['--no-sandbox', '--disable-setuid-sandbox'],
           headless: true,
         })
         return browser
@@ -158,7 +189,6 @@ async function getPlaywrightBrowser(): Promise<Browser | null> {
 }
 
 async function renderPageWithPlaywright(url: string): Promise<{
-  html: string
   text: string
   links: string[]
 } | null> {
@@ -180,8 +210,7 @@ async function renderPageWithPlaywright(url: string): Promise<{
       timeout: Math.min(4_000, jsRenderTimeoutMs),
     }).catch(() => undefined)
 
-    const [html, text, links] = await Promise.all([
-      page.content(),
+    const [text, links] = await Promise.all([
       page.evaluate(() => document.body?.innerText?.replace(/\s+/g, ' ').trim() ?? ''),
       page.evaluate(() =>
         Array.from(document.querySelectorAll('a[href]'))
@@ -190,7 +219,7 @@ async function renderPageWithPlaywright(url: string): Promise<{
       ),
     ])
 
-    return { html, text, links }
+    return { text, links }
   } catch {
     return null
   } finally {
@@ -240,11 +269,10 @@ export async function discoverWebsiteUrls(options: CrawlDiscoveryOptions): Promi
   }
 
   const fetchTimeoutMs = options.fetchTimeoutMs ?? 12_000
-  const dedup = new Set<string>()
+  const dedup = new Set<string>([rootUrl])
 
-  const sitemapUrls = await fetchSitemapUrls(rootUrl, fetchTimeoutMs)
-  for (const raw of sitemapUrls) {
-    const normalized = normalizeUrl(raw)
+  for (const rawSeed of options.seedUrls ?? []) {
+    const normalized = normalizeUrl(rawSeed, rootUrl)
     if (!normalized) {
       continue
     }
@@ -256,16 +284,29 @@ export async function discoverWebsiteUrls(options: CrawlDiscoveryOptions): Promi
     }
     dedup.add(normalized)
     if (dedup.size >= maxPages) {
-      return Array.from(dedup)
+      return Array.from(dedup).slice(0, maxPages)
     }
   }
 
-  if (dedup.size > 0) {
-    return Array.from(dedup).slice(0, maxPages)
+  const sitemapUrls = await fetchSitemapUrls(rootUrl, fetchTimeoutMs)
+  for (const raw of sitemapUrls) {
+    const normalized = normalizeUrl(raw, rootUrl)
+    if (!normalized) {
+      continue
+    }
+    if (getHostname(normalized) !== rootHost) {
+      continue
+    }
+    if (shouldSkipUrl(normalized)) {
+      continue
+    }
+    dedup.add(normalized)
+    if (dedup.size >= maxPages) {
+      return Array.from(dedup).slice(0, maxPages)
+    }
   }
 
-  const queue: string[] = [rootUrl]
-  dedup.add(rootUrl)
+  const queue: string[] = Array.from(dedup)
   const visited = new Set<string>()
 
   while (queue.length > 0 && dedup.size < maxPages) {
@@ -279,14 +320,12 @@ export async function discoverWebsiteUrls(options: CrawlDiscoveryOptions): Promi
     visited.add(current)
 
     try {
-      const response = await fetchWithTimeout(current, fetchTimeoutMs)
-      const contentType = response.headers.get('content-type') ?? ''
-      if (!response.ok || !contentType.toLowerCase().includes('text/html')) {
+      const response = await fetchHtmlWithAxios(current, fetchTimeoutMs)
+      if (response.status < 200 || response.status >= 300 || !response.contentType.toLowerCase().includes('text/html')) {
         continue
       }
 
-      const html = await response.text()
-      let links = extractInternalLinks(html, current, rootHost)
+      let links = extractInternalLinks(response.html, current, rootHost)
       if (links.length === 0) {
         const rendered = await renderPageWithPlaywright(current)
         if (rendered) {
@@ -317,20 +356,46 @@ export async function discoverWebsiteUrls(options: CrawlDiscoveryOptions): Promi
 }
 
 export async function fetchAndExtractPage(options: FetchPageOptions): Promise<CrawledPage> {
-  const response = await fetchWithTimeout(options.url, options.fetchTimeoutMs ?? 12_000)
-  const httpStatus = response.status
+  let response: HttpPageResponse
+  try {
+    response = await fetchHtmlWithAxios(options.url, options.fetchTimeoutMs ?? 12_000)
+  } catch (error) {
+    logPageEvent({
+      url: options.url,
+      status: 0,
+      contentType: '',
+      extractedLen: 0,
+      usedFallback: false,
+      skipReason: error instanceof Error ? error.message : 'fetch_failed',
+    })
+    throw error
+  }
 
-  if (!response.ok) {
+  if (response.status < 200 || response.status >= 300) {
+    logPageEvent({
+      url: options.url,
+      status: response.status,
+      contentType: response.contentType,
+      extractedLen: 0,
+      usedFallback: false,
+      skipReason: `http_${response.status}`,
+    })
     throw new Error(`HTTP ${response.status}`)
   }
 
-  const contentType = response.headers.get('content-type') ?? ''
-  if (!contentType.toLowerCase().includes('text/html')) {
-    throw new Error(`Unsupported content-type: ${contentType || 'unknown'}`)
+  if (!response.contentType.toLowerCase().includes('text/html')) {
+    logPageEvent({
+      url: options.url,
+      status: response.status,
+      contentType: response.contentType,
+      extractedLen: 0,
+      usedFallback: false,
+      skipReason: 'unsupported_content_type',
+    })
+    throw new Error(`Unsupported content-type: ${response.contentType || 'unknown'}`)
   }
 
-  const html = await response.text()
-  const $ = cheerio.load(html)
+  const $ = cheerio.load(response.html)
   $('script, style, noscript, svg').remove()
 
   const title = $('title').first().text().trim() || null
@@ -338,30 +403,55 @@ export async function fetchAndExtractPage(options: FetchPageOptions): Promise<Cr
     $('meta[name="description"]').attr('content')?.trim() ||
     $('meta[property="og:description"]').attr('content')?.trim() ||
     ''
+  const headings = $('h1, h2, h3')
+    .map((_index, element) => $(element).text().trim())
+    .get()
+    .filter(Boolean)
+    .join(' ')
 
   let contentText = $('body').text().replace(/\s+/g, ' ').trim()
-  if (!contentText && metaDescription) {
-    contentText = metaDescription
+  let usedFallback = false
+
+  if (contentText.length < thinContentThreshold) {
+    contentText = [contentText, title ?? '', metaDescription, headings]
+      .filter(Boolean)
+      .join('\n')
+      .replace(/\s+/g, ' ')
+      .trim()
+    usedFallback = true
   }
 
-  if (contentText.length < minimumUsefulTextLength) {
+  if (contentText.length < thinContentThreshold) {
     const rendered = await renderPageWithPlaywright(options.url)
-    if (rendered) {
-      const renderedText = rendered.text.trim()
-      if (renderedText.length > contentText.length) {
-        contentText = renderedText
-      }
+    if (rendered && rendered.text.trim().length > contentText.length) {
+      contentText = rendered.text.trim()
+      usedFallback = true
     }
   }
 
   if (!contentText) {
-    throw new Error('No extractable text content')
+    contentText = [title ?? '', metaDescription, headings].filter(Boolean).join(' ').trim()
+    usedFallback = true
   }
+
+  if (!contentText) {
+    contentText = `Source URL: ${options.url}`
+    usedFallback = true
+  }
+
+  logPageEvent({
+    url: options.url,
+    status: response.status,
+    contentType: response.contentType,
+    extractedLen: contentText.length,
+    usedFallback,
+    skipReason: null,
+  })
 
   return {
     url: options.url,
     title,
     contentText,
-    httpStatus,
+    httpStatus: response.status,
   }
 }

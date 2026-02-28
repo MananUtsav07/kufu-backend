@@ -23,7 +23,14 @@ export function chunkText(input: string, options: ChunkTextOptions = {}): Chunk[
   const text = normalizeContent(input)
 
   if (!text) {
-    return []
+    const placeholder = 'No textual content extracted from this page.'
+    return [
+      {
+        chunk_index: 0,
+        chunk_text: placeholder,
+        token_estimate: estimateTokens(placeholder),
+      },
+    ]
   }
 
   const step = Math.max(1, chunkSize - overlap)

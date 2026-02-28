@@ -78,6 +78,7 @@ export function createRagRouter(options: RagRouterOptions): Router {
         chatbotId: parsed.data.chatbotId,
         websiteUrl: parsed.data.websiteUrl,
         maxPages: parsed.data.maxPages,
+        urls: parsed.data.urls,
         userId: user.id,
         isResync: false,
       })
@@ -124,6 +125,7 @@ export function createRagRouter(options: RagRouterOptions): Router {
         chatbotId: parsed.data.chatbotId,
         websiteUrl,
         maxPages: parsed.data.maxPages,
+        urls: parsed.data.urls,
         userId: user.id,
         isResync: true,
       })

@@ -13,10 +13,15 @@ Per chatbot flow:
 5. Store pages/chunks in Supabase Postgres + pgvector.
 6. At chat time: embed user query, retrieve top chunks, inject as context, then ask LLM.
 
-For JS-heavy websites, crawler now falls back to Playwright rendering when static HTML extraction is too thin.
+For JS-heavy websites, crawler can use Playwright rendering when static HTML extraction is thin.
 Optional env controls:
-- `RAG_JS_RENDER=false` to disable browser-render fallback.
+- `ENABLE_PLAYWRIGHT=true` to enable browser-render fallback (default is off).
 - `RAG_JS_RENDER_TIMEOUT_MS=15000` to tune render timeout.
+
+Render build note for Playwright:
+- include `npx playwright install --with-deps` in build command.
+
+For private pages (dashboards/login-required URLs), use Dashboard Knowledge Base content instead of crawl URLs.
 
 ## Endpoints
 
@@ -31,7 +36,11 @@ All routes below are protected (dashboard auth required).
 {
   "chatbotId": "uuid",
   "websiteUrl": "https://example.com",
-  "maxPages": 60
+  "maxPages": 60,
+  "urls": [
+    "https://example.com/about",
+    "https://example.com/services"
+  ]
 }
 ```
 
@@ -54,11 +63,16 @@ All routes below are protected (dashboard auth required).
 {
   "chatbotId": "uuid",
   "websiteUrl": "https://example.com",
-  "maxPages": 60
+  "maxPages": 60,
+  "urls": [
+    "https://example.com/about",
+    "https://example.com/services"
+  ]
 }
 ```
 
 `resync` clears old RAG pages/chunks for that chatbot, then re-crawls.
+`urls` is optional and is used for direct public URL ingestion via HTTP GET.
 
 ### Check ingestion status
 
