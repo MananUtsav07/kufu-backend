@@ -370,6 +370,8 @@ export async function fetchAndExtractPage(options: FetchPageOptions): Promise<Cr
     })
     throw error
   }
+  console.log('Raw HTML length:', response.html.length)
+console.log('First 500 chars:', response.html.slice(0, 500))
 
   if (response.status < 200 || response.status >= 300) {
     logPageEvent({
