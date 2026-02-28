@@ -162,6 +162,7 @@ export function createWidgetScriptRouter(options: WidgetRouterOptions): Router {
   console.log('[kufu-widget] loaded', { key: '${key}', backend: '${backendBase}' });
 })();`
 
+      response.setHeader('Cross-Origin-Resource-Policy', 'cross-origin')
       response.setHeader('Content-Type', 'application/javascript; charset=utf-8')
       response.status(200).send(script)
     }),

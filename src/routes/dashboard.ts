@@ -79,6 +79,10 @@ function toSingleParam(value: string | string[] | undefined): string | null {
   return null
 }
 
+function trimTrailingSlash(value: string): string {
+  return value.replace(/\/+$/, '')
+}
+
 export function createDashboardRouter(options: DashboardRouterOptions): Router {
   const router = Router()
 
@@ -427,7 +431,8 @@ export function createDashboardRouter(options: DashboardRouterOptions): Router {
         throw new AppError('Chatbot not found', 404)
       }
 
-      const snippet = `<script src="${options.backendBaseUrl}/widget/kufu.js?key=${encodeURIComponent(chatbot.widget_public_key)}" async></script>`
+      const backendBase = trimTrailingSlash(options.backendBaseUrl)
+      const snippet = `<script src="${backendBase}/widget/kufu.js?key=${encodeURIComponent(chatbot.widget_public_key)}" async></script>`
 
       response.json({
         ok: true,
