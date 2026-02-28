@@ -353,10 +353,18 @@ export async function fetchAndExtractPage(options: FetchPageOptions): Promise<Cr
 
   const html = await response.text()
   const $ = cheerio.load(html)
-  $('script, style, nav, footer, header, aside, noscript, svg').remove()
+  $('script, style, noscript, svg').remove()
 
   const title = $('title').first().text().trim() || null
+  const metaDescription =
+    $('meta[name="description"]').attr('content')?.trim() ||
+    $('meta[property="og:description"]').attr('content')?.trim() ||
+    ''
+
   let contentText = $('body').text().replace(/\s+/g, ' ').trim()
+  if (!contentText && metaDescription) {
+    contentText = metaDescription
+  }
 
   if (contentText.length < minimumUsefulTextLength) {
     const rendered = await renderPageWithPlaywright(options.url)
