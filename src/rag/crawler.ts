@@ -1,4 +1,5 @@
 import * as cheerio from 'cheerio'
+import type { Browser } from 'playwright'
 
 export type CrawledPage = {
   url: string
@@ -47,6 +48,13 @@ const skipExtensions = new Set([
   '.mp4',
   '.mp3',
 ])
+
+const jsRenderEnabled = process.env.RAG_JS_RENDER !== 'false'
+const jsRenderTimeoutMs = Number(process.env.RAG_JS_RENDER_TIMEOUT_MS ?? 15_000)
+const minimumUsefulTextLength = 120
+
+let browserPromise: Promise<Browser | null> | null = null
+let browserCleanupRegistered = false
 
 function normalizeUrl(rawUrl: string, baseUrl?: string): string | null {
   try {
@@ -124,6 +132,91 @@ async function fetchSitemapUrls(rootUrl: string, fetchTimeoutMs: number): Promis
     return locs
   } catch {
     return []
+  }
+}
+
+async function getPlaywrightBrowser(): Promise<Browser | null> {
+  if (!jsRenderEnabled) {
+    return null
+  }
+
+  if (!browserPromise) {
+    browserPromise = (async () => {
+      try {
+        const playwright = await import('playwright')
+        const browser = await playwright.chromium.launch({
+          headless: true,
+          args: ['--no-sandbox', '--disable-setuid-sandbox'],
+        })
+
+        if (!browserCleanupRegistered) {
+          browserCleanupRegistered = true
+          const cleanup = async () => {
+            try {
+              await browser.close()
+            } catch {
+              // Ignore cleanup failures.
+            }
+          }
+          process.once('exit', () => {
+            void cleanup()
+          })
+          process.once('SIGINT', () => {
+            void cleanup()
+          })
+          process.once('SIGTERM', () => {
+            void cleanup()
+          })
+        }
+
+        return browser
+      } catch {
+        return null
+      }
+    })()
+  }
+
+  return browserPromise
+}
+
+async function renderPageWithPlaywright(url: string): Promise<{
+  html: string
+  text: string
+  links: string[]
+} | null> {
+  const browser = await getPlaywrightBrowser()
+  if (!browser) {
+    return null
+  }
+
+  const page = await browser.newPage({
+    userAgent: 'KufuBot/1.0 (+https://kufu.ai)',
+  })
+
+  try {
+    await page.goto(url, {
+      waitUntil: 'domcontentloaded',
+      timeout: jsRenderTimeoutMs,
+    })
+    await page.waitForLoadState('networkidle', {
+      timeout: Math.min(4_000, jsRenderTimeoutMs),
+    }).catch(() => undefined)
+
+    const [html, text, links] = await Promise.all([
+      page.content(),
+      page.evaluate(() => document.body?.innerText?.replace(/\s+/g, ' ').trim() ?? ''),
+      page.evaluate(() =>
+        Array.from(document.querySelectorAll('a[href]'))
+          .map((anchor) => anchor.getAttribute('href') ?? '')
+          .filter((href) => href.length > 0),
+      ),
+    ])
+
+    return { html, text, links }
+  } catch {
+    return null
+  } finally {
+    await page.close().catch(() => undefined)
   }
 }
 
@@ -215,7 +308,18 @@ export async function discoverWebsiteUrls(options: CrawlDiscoveryOptions): Promi
       }
 
       const html = await response.text()
-      const links = extractInternalLinks(html, current, rootHost)
+      let links = extractInternalLinks(html, current, rootHost)
+      if (links.length === 0) {
+        const rendered = await renderPageWithPlaywright(current)
+        if (rendered) {
+          links = rendered.links
+            .map((href) => normalizeUrl(href, current))
+            .filter((value): value is string => Boolean(value))
+            .filter((url) => getHostname(url) === rootHost)
+            .filter((url) => !shouldSkipUrl(url))
+        }
+      }
+
       for (const link of links) {
         if (dedup.has(link)) {
           continue
@@ -252,7 +356,17 @@ export async function fetchAndExtractPage(options: FetchPageOptions): Promise<Cr
   $('script, style, nav, footer, header, aside, noscript, svg').remove()
 
   const title = $('title').first().text().trim() || null
-  const contentText = $('body').text().replace(/\s+/g, ' ').trim()
+  let contentText = $('body').text().replace(/\s+/g, ' ').trim()
+
+  if (contentText.length < minimumUsefulTextLength) {
+    const rendered = await renderPageWithPlaywright(options.url)
+    if (rendered) {
+      const renderedText = rendered.text.trim()
+      if (renderedText.length > contentText.length) {
+        contentText = renderedText
+      }
+    }
+  }
 
   if (!contentText) {
     throw new Error('No extractable text content')

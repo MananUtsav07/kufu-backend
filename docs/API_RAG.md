@@ -13,6 +13,11 @@ Per chatbot flow:
 5. Store pages/chunks in Supabase Postgres + pgvector.
 6. At chat time: embed user query, retrieve top chunks, inject as context, then ask LLM.
 
+For JS-heavy websites, crawler now falls back to Playwright rendering when static HTML extraction is too thin.
+Optional env controls:
+- `RAG_JS_RENDER=false` to disable browser-render fallback.
+- `RAG_JS_RENDER_TIMEOUT_MS=15000` to tune render timeout.
+
 ## Endpoints
 
 All routes below are protected (dashboard auth required).
