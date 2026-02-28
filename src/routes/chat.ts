@@ -8,6 +8,7 @@ import { getClientIp, getTimestamp, hashIp, respondValidationError } from '../li
 import { createInMemoryLimiter } from '../lib/rateLimit.js'
 import { sanitizeMessages } from '../lib/sanitizeMessages.js'
 import { buildSystemPrompt } from '../lib/systemPrompt.js'
+import { retrieveRelevantChunks } from '../rag/retrieval.js'
 import { chatSchema, chatLogSchema } from '../schemas/api.js'
 import {
   estimateTokens,
@@ -88,15 +89,22 @@ async function resolveChatContext(
   request: Request,
   body: {
     key?: string
+    widgetKey?: string
     chatbot_id?: string
+    chatbotId?: string
     client_id?: string
-    metadata?: { key?: string; chatbot_id?: string; client_id?: string }
+    metadata?: { key?: string; widgetKey?: string; chatbot_id?: string; chatbotId?: string; client_id?: string }
   },
   options: ChatRouterOptions,
 ): Promise<ChatContext> {
   const authUser = getOptionalRequestUser(request, options.jwtSecret)
-  const providedKey = body.key || body.metadata?.key || (typeof request.query.key === 'string' ? request.query.key : undefined)
-  const providedChatbotId = body.chatbot_id || body.metadata?.chatbot_id
+  const providedKey =
+    body.key ||
+    body.widgetKey ||
+    body.metadata?.key ||
+    body.metadata?.widgetKey ||
+    (typeof request.query.key === 'string' ? request.query.key : undefined)
+  const providedChatbotId = body.chatbot_id || body.chatbotId || body.metadata?.chatbot_id || body.metadata?.chatbotId
 
   if (authUser) {
     const user = await loadUserById(options.supabaseAdminClient, authUser.userId)
@@ -273,7 +281,33 @@ export function createChatRouter(options: ChatRouterOptions): Router {
         })
       }
 
-      const systemPrompt = buildSystemPrompt(mergedKnowledge)
+      const ragChunks =
+        context.chatbotId && options.openAiClient
+          ? await retrieveRelevantChunks({
+            supabaseAdminClient: options.supabaseAdminClient,
+            openAiClient: options.openAiClient,
+            chatbotId: context.chatbotId,
+            queryText: lastUserMessage,
+            topK: 8,
+          })
+          : []
+
+      const ragContext = ragChunks
+        .map((chunk, index) => `Source ${index + 1}: ${chunk.url}\n${chunk.chunkText}`)
+        .join('\n\n')
+
+      const strictContextInstruction = [
+        'You are a business assistant.',
+        'Use only the provided context to answer.',
+        "If the answer is not in the context, say you don't know and suggest contacting the business directly.",
+        'Do not fabricate facts or policies.',
+      ].join(' ')
+
+      const systemPrompt = [
+        strictContextInstruction,
+        buildSystemPrompt(mergedKnowledge),
+        ragContext ? `Website Context:\n${ragContext}` : 'Website Context:\nNo relevant website context was retrieved.',
+      ].join('\n\n')
 
       const completion = await options.openAiClient.chat.completions.create({
         model: options.openAiModel,

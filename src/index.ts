@@ -10,6 +10,7 @@ import { createDataStore } from './lib/dataStore.js'
 import { globalErrorHandler } from './lib/errorHandler.js'
 import { loadKnowledge, KNOWLEDGE_PATH } from './lib/knowledge.js'
 import { requestContextMiddleware } from './lib/requestContext.js'
+import { createRagIngestionManager, startRagMaintenanceSchedulers } from './rag/ingestionManager.js'
 import { createApiRouter } from './routes/api.js'
 import { createWidgetScriptRouter } from './routes/widget.js'
 import {
@@ -87,6 +88,11 @@ app.use(globalErrorHandler)
 async function start() {
   await dataStore.ensureInitialized()
   const knowledgeText = await dataStore.getKnowledgeText()
+
+  if (supabaseAdminClient && openAiClient) {
+    const ragManager = createRagIngestionManager(supabaseAdminClient, openAiClient)
+    startRagMaintenanceSchedulers(ragManager)
+  }
 
   app.listen(port, () => {
     console.log(`[server] listening on http://localhost:${port}`)

@@ -24,14 +24,18 @@ export const chatSchema = z
     messages: z.unknown(),
     sessionId: z.string().trim().min(1).max(120).optional(),
     key: z.string().trim().min(8).optional(),
+    widgetKey: z.string().trim().min(8).optional(),
     chatbot_id: z.string().uuid().optional(),
+    chatbotId: z.string().uuid().optional(),
     client_id: z.string().uuid().optional(),
     metadata: z
       .object({
         page: z.string().trim().optional(),
         client_id: z.string().uuid().optional(),
         chatbot_id: z.string().uuid().optional(),
+        chatbotId: z.string().uuid().optional(),
         key: z.string().trim().optional(),
+        widgetKey: z.string().trim().optional(),
       })
       .optional(),
   })
@@ -58,3 +62,29 @@ export const chatLogSchema = z
 export const widgetConfigQuerySchema = z.object({
   key: z.string().trim().min(8, 'key is required'),
 })
+
+export const ragIngestStartSchema = z
+  .object({
+    chatbotId: z.string().uuid(),
+    websiteUrl: z.string().trim().url(),
+    maxPages: z.coerce.number().int().min(1).max(200).optional().default(60),
+  })
+  .strict()
+
+export const ragIngestStatusQuerySchema = z.object({
+  runId: z.string().uuid(),
+})
+
+export const ragIngestCancelSchema = z
+  .object({
+    runId: z.string().uuid(),
+  })
+  .strict()
+
+export const ragIngestResyncSchema = z
+  .object({
+    chatbotId: z.string().uuid(),
+    websiteUrl: z.string().trim().url().optional(),
+    maxPages: z.coerce.number().int().min(1).max(200).optional().default(60),
+  })
+  .strict()

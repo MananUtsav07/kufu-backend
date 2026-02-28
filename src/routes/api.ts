@@ -10,6 +10,7 @@ import { createAdminRouter } from './admin.js'
 import { createAuthRouter } from './auth.js'
 import { createChatRouter } from './chat.js'
 import { createDashboardRouter } from './dashboard.js'
+import { createRagRouter } from './rag.js'
 import { createWidgetApiRouter } from './widget.js'
 
 type ApiRouterOptions = {
@@ -91,6 +92,15 @@ export function createApiRouter(options: ApiRouterOptions): Router {
       supabaseAdminClient: options.supabaseAdminClient,
       frontendUrl: options.frontendUrl,
       backendBaseUrl: options.backendBaseUrl,
+    }),
+  )
+
+  router.use(
+    '/rag',
+    createRagRouter({
+      jwtSecret: options.jwtSecret,
+      supabaseAdminClient: options.supabaseAdminClient,
+      openAiClient: options.openAiClient,
     }),
   )
 
