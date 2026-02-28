@@ -54,7 +54,6 @@ const jsRenderTimeoutMs = Number(process.env.RAG_JS_RENDER_TIMEOUT_MS ?? 15_000)
 const minimumUsefulTextLength = 120
 
 let browserPromise: Promise<Browser | null> | null = null
-let browserCleanupRegistered = false
 
 function normalizeUrl(rawUrl: string, baseUrl?: string): string | null {
   try {
