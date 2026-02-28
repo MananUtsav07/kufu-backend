@@ -10,6 +10,7 @@
     "smoke-test": "tsx scripts/smoke-test.ts"
   },
   "dependencies": {
+    "@sparticuz/chromium": "^143.0.4",
     "@supabase/supabase-js": "^2.97.0",
     "bcryptjs": "^3.0.3",
     "cheerio": "^1.2.0",
@@ -23,6 +24,7 @@
     "nodemailer": "^8.0.1",
     "openai": "^6.24.0",
     "playwright": "^1.54.2",
+    "playwright-core": "^1.58.2",
     "zod": "^4.3.6"
   },
   "devDependencies": {

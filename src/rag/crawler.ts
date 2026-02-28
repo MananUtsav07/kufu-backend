@@ -136,39 +136,18 @@ async function fetchSitemapUrls(rootUrl: string, fetchTimeoutMs: number): Promis
 }
 
 async function getPlaywrightBrowser(): Promise<Browser | null> {
-  if (!jsRenderEnabled) {
-    return null
-  }
+  if (!jsRenderEnabled) return null
 
   if (!browserPromise) {
     browserPromise = (async () => {
       try {
-        const playwright = await import('playwright')
-        const browser = await playwright.chromium.launch({
+        const chromium = await import('@sparticuz/chromium')
+        const { chromium: playwrightChromium } = await import('playwright-core')
+        const browser = await playwrightChromium.launch({
+          args: chromium.default.args,
+          executablePath: await chromium.default.executablePath(),
           headless: true,
-          args: ['--no-sandbox', '--disable-setuid-sandbox'],
         })
-
-        if (!browserCleanupRegistered) {
-          browserCleanupRegistered = true
-          const cleanup = async () => {
-            try {
-              await browser.close()
-            } catch {
-              // Ignore cleanup failures.
-            }
-          }
-          process.once('exit', () => {
-            void cleanup()
-          })
-          process.once('SIGINT', () => {
-            void cleanup()
-          })
-          process.once('SIGTERM', () => {
-            void cleanup()
-          })
-        }
-
         return browser
       } catch {
         return null
