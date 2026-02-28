@@ -1,0 +1,95 @@
+﻿@baseUrl = http://localhost:8787
+@token = paste_jwt_here
+@chatbotId = paste_chatbot_id_here
+@widgetKey = paste_widget_key_here
+
+### Health
+GET {{baseUrl}}/api/health
+
+### Register
+POST {{baseUrl}}/api/auth/register
+Content-Type: application/json
+
+{
+  "email": "test_{{$timestamp}}@example.com",
+  "password": "TestPass@12345",
+  "business_name": "Test Business",
+  "website_url": "https://example.com"
+}
+
+### Verify Email
+POST {{baseUrl}}/api/auth/verify-email
+Content-Type: application/json
+
+{
+  "token": "paste_dev_token"
+}
+
+### Login
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "test@example.com",
+  "password": "TestPass@12345"
+}
+
+### Me
+GET {{baseUrl}}/api/auth/me
+Authorization: Bearer {{token}}
+
+### Dashboard Summary
+GET {{baseUrl}}/api/dashboard/summary
+Authorization: Bearer {{token}}
+
+### Create Chatbot
+POST {{baseUrl}}/api/dashboard/chatbots
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "name": "Primary Bot",
+  "website_url": "https://example.com",
+  "allowed_domains": ["example.com"],
+  "is_active": true
+}
+
+### Chat (dashboard token mode)
+POST {{baseUrl}}/api/chat
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "chatbot_id": "{{chatbotId}}",
+  "sessionId": "test-session-1",
+  "messages": [
+    { "role": "user", "content": "What are your pricing plans?" }
+  ],
+  "metadata": { "page": "/dashboard" }
+}
+
+### Chat (widget key mode)
+POST {{baseUrl}}/api/chat?key={{widgetKey}}
+Content-Type: application/json
+
+{
+  "messages": [
+    { "role": "user", "content": "I want to book a demo" }
+  ],
+  "sessionId": "widget-session-1",
+  "metadata": { "page": "/widget" }
+}
+
+### Widget Config
+GET {{baseUrl}}/api/widget/config?key={{widgetKey}}
+
+### Widget JS
+GET {{baseUrl}}/widget/kufu.js?key={{widgetKey}}
+
+### Admin Overview
+GET {{baseUrl}}/api/admin/overview
+Authorization: Bearer {{token}}
+
+### Admin Reset Periods
+POST {{baseUrl}}/api/admin/maintenance/reset-periods
+Authorization: Bearer {{token}}

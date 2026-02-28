@@ -1,17 +1,11 @@
-import jwt from 'jsonwebtoken'
-
-export type AppJwtPayload = {
-  sub: string
-  email: string
-  client_id: string
-  iat?: number
-  exp?: number
-}
+﻿import jwt from 'jsonwebtoken'
+import type { JwtPayload, UserRole } from '../types/auth.js'
 
 type SignTokenInput = {
   userId: string
   email: string
   clientId: string
+  role: UserRole
 }
 
 export function signAuthToken(payload: SignTokenInput, secret: string): string {
@@ -20,6 +14,7 @@ export function signAuthToken(payload: SignTokenInput, secret: string): string {
       sub: payload.userId,
       email: payload.email,
       client_id: payload.clientId,
+      role: payload.role,
     },
     secret,
     {
@@ -28,7 +23,7 @@ export function signAuthToken(payload: SignTokenInput, secret: string): string {
   )
 }
 
-export function verifyAuthToken(token: string, secret: string): AppJwtPayload | null {
+export function verifyAuthToken(token: string, secret: string): JwtPayload | null {
   try {
     const decoded = jwt.verify(token, secret)
     if (
@@ -36,7 +31,8 @@ export function verifyAuthToken(token: string, secret: string): AppJwtPayload | 
       typeof decoded !== 'object' ||
       typeof decoded.sub !== 'string' ||
       typeof decoded.email !== 'string' ||
-      typeof decoded.client_id !== 'string'
+      typeof decoded.client_id !== 'string' ||
+      (decoded.role !== 'user' && decoded.role !== 'admin')
     ) {
       return null
     }
@@ -45,6 +41,7 @@ export function verifyAuthToken(token: string, secret: string): AppJwtPayload | 
       sub: decoded.sub,
       email: decoded.email,
       client_id: decoded.client_id,
+      role: decoded.role,
       iat: typeof decoded.iat === 'number' ? decoded.iat : undefined,
       exp: typeof decoded.exp === 'number' ? decoded.exp : undefined,
     }

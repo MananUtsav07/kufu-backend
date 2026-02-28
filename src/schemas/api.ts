@@ -1,4 +1,4 @@
-import { z } from 'zod'
+﻿import { z } from 'zod'
 
 export const demoLeadSchema = z
   .object({
@@ -22,21 +22,16 @@ export const contactLeadSchema = z
 export const chatSchema = z
   .object({
     messages: z.unknown(),
+    sessionId: z.string().trim().min(1).max(120).optional(),
+    key: z.string().trim().min(8).optional(),
+    chatbot_id: z.string().uuid().optional(),
+    client_id: z.string().uuid().optional(),
     metadata: z
       .object({
         page: z.string().trim().optional(),
         client_id: z.string().uuid().optional(),
-      })
-      .optional(),
-    client_id: z.string().uuid().optional(),
-    sessionId: z.string().trim().optional(),
-    lead: z
-      .object({
-        name: z.string().trim().optional(),
-        email: z.string().trim().email().optional(),
-        phone: z.string().trim().optional(),
-        need: z.string().trim().optional(),
-        client_id: z.string().uuid().optional(),
+        chatbot_id: z.string().uuid().optional(),
+        key: z.string().trim().optional(),
       })
       .optional(),
   })
@@ -59,3 +54,7 @@ export const chatLogSchema = z
       .min(1, 'At least one message is required'),
   })
   .strict()
+
+export const widgetConfigQuerySchema = z.object({
+  key: z.string().trim().min(8, 'key is required'),
+})

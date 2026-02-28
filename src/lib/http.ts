@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+﻿import { createHash } from 'node:crypto'
 import type { Request, Response } from 'express'
 import { z } from 'zod'
 
@@ -23,11 +23,10 @@ export function hashIp(ip: string): string {
   return createHash('sha256').update(ip).digest('hex')
 }
 
-export function respondValidationError(error: z.ZodError, res: Response) {
-  return res.status(400).json({
+export function respondValidationError(error: z.ZodError, response: Response) {
+  return response.status(400).json({
     ok: false,
     error: 'Validation failed',
     issues: error.issues,
   })
 }
-

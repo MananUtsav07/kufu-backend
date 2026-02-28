@@ -1,13 +1,12 @@
-import { z } from 'zod'
-
+﻿import { z } from 'zod'
 import { emailSchema, passwordSchema } from '../lib/validation.js'
 
 export const registerSchema = z
   .object({
     email: emailSchema,
     password: passwordSchema,
-    business_name: z.string().trim().min(1, 'Business name is required').optional(),
-    website_url: z.string().trim().url('Invalid website URL').optional().or(z.literal('')),
+    business_name: z.string().trim().min(1).max(200).optional(),
+    website_url: z.string().trim().url().optional().or(z.literal('')),
   })
   .strict()
 
@@ -24,7 +23,6 @@ export const verifyEmailSchema = z
   })
   .strict()
 
-export const verifyQuerySchema = z.object({
-  token: z.string().trim().min(1, 'Token is required'),
-  email: emailSchema.optional(),
+export const authTokenQuerySchema = z.object({
+  token: z.string().trim().min(1, 'Token is required').optional(),
 })

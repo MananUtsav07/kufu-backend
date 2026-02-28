@@ -1,12 +1,7 @@
-import type { NextFunction, Request, Response } from 'express'
-
+﻿import type { NextFunction, Request, Response } from 'express'
+import type { RequestUser } from '../types/auth.js'
 import { verifyAuthToken } from './jwt.js'
-
-export type RequestUser = {
-  userId: string
-  email: string
-  clientId: string
-}
+import { AppError } from './errors.js'
 
 export type AuthenticatedRequest = Request & {
   user: RequestUser
@@ -31,8 +26,27 @@ function readCookieToken(request: Request): string | null {
   return typeof candidate === 'string' && candidate.trim().length > 0 ? candidate : null
 }
 
-function readToken(request: Request): string | null {
+export function readAuthToken(request: Request): string | null {
   return readBearerToken(request) ?? readCookieToken(request)
+}
+
+export function getOptionalRequestUser(request: Request, jwtSecret: string): RequestUser | null {
+  const token = readAuthToken(request)
+  if (!token || !jwtSecret) {
+    return null
+  }
+
+  const payload = verifyAuthToken(token, jwtSecret)
+  if (!payload) {
+    return null
+  }
+
+  return {
+    userId: payload.sub,
+    email: payload.email,
+    clientId: payload.client_id,
+    role: payload.role,
+  }
 }
 
 export function authMiddleware(jwtSecret: string) {
@@ -45,8 +59,8 @@ export function authMiddleware(jwtSecret: string) {
       return
     }
 
-    const token = readToken(request)
-    if (!token) {
+    const requestUser = getOptionalRequestUser(request, jwtSecret)
+    if (!requestUser) {
       response.status(401).json({
         ok: false,
         error: 'Unauthorized',
@@ -54,21 +68,17 @@ export function authMiddleware(jwtSecret: string) {
       return
     }
 
-    const payload = verifyAuthToken(token, jwtSecret)
-    if (!payload) {
-      response.status(401).json({
-        ok: false,
-        error: 'Invalid token',
-      })
-      return
-    }
-
-    ;(request as AuthenticatedRequest).user = {
-      userId: payload.sub,
-      email: payload.email,
-      clientId: payload.client_id,
-    }
-
+    ;(request as AuthenticatedRequest).user = requestUser
     next()
   }
+}
+
+export function requireAdmin(request: Request, _response: Response, next: NextFunction) {
+  const authRequest = request as AuthenticatedRequest
+  if (!authRequest.user || authRequest.user.role !== 'admin') {
+    next(new AppError('Admin access required', 403))
+    return
+  }
+
+  next()
 }
