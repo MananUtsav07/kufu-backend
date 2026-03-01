@@ -1,4 +1,7 @@
-﻿import cookieParser from 'cookie-parser'
+﻿import { setDefaultResultOrder } from 'node:dns'
+setDefaultResultOrder('ipv4first')
+
+import cookieParser from 'cookie-parser'
 import cors from 'cors'
 import express from 'express'
 import helmet from 'helmet'
