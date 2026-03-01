@@ -47,6 +47,6 @@ export const supabaseAdminClient = createSupabaseAdminClient({
 })
 
 export const jwtSecret = process.env.JWT_SECRET?.trim() ?? ''
-export const emailUser = process.env.EMAIL_USER?.trim() ?? ''
-export const emailPass = process.env.EMAIL_PASS?.trim() ?? ''
+export const resendApiKey = process.env.RESEND_API_KEY?.trim() ?? ''
+export const emailFrom = process.env.EMAIL_USER?.trim() ?? 'onboarding@resend.dev'
 export const devBypassEmailVerify = process.env.DEV_BYPASS_EMAIL_VERIFY === 'true'

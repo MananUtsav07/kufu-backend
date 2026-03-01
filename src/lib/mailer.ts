@@ -1,8 +1,8 @@
-import nodemailer from 'nodemailer'
+import { Resend } from 'resend'
 
 type MailerOptions = {
-  emailUser: string
-  emailPass: string
+  resendApiKey: string
+  emailFrom: string
 }
 
 type VerificationEmailPayload = {
@@ -13,19 +13,13 @@ type VerificationEmailPayload = {
 }
 
 export function createMailer(options: MailerOptions) {
-  const { emailUser, emailPass } = options
+  const { resendApiKey, emailFrom } = options
 
-  if (!emailUser || !emailPass) {
+  if (!resendApiKey) {
     return null
   }
 
-  const transporter = nodemailer.createTransport({
-    service: 'gmail',
-    auth: {
-      user: emailUser,
-      pass: emailPass,
-    },
-  })
+  const resend = new Resend(resendApiKey)
 
   return {
     async sendVerificationEmail(payload: VerificationEmailPayload): Promise<void> {
@@ -51,8 +45,8 @@ export function createMailer(options: MailerOptions) {
         </div>
       `
 
-      await transporter.sendMail({
-        from: `"Kufu" <${emailUser}>`,
+      await resend.emails.send({
+        from: emailFrom,
         to,
         subject: 'Verify your Kufu account',
         text: `Verify your account: ${verificationUrl}\n\nBackup link: ${fallbackVerificationUrl}\n\nLink expires in ${expiresInMinutes} minutes.`,
