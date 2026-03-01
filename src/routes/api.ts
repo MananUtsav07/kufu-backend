@@ -138,6 +138,7 @@ export function createApiRouter(options: ApiRouterOptions): Router {
             submittedAtIso: new Date().toISOString(),
             fullName: parsed.data.fullName,
             businessType: parsed.data.businessType,
+            websiteUrl: parsed.data.websiteUrl,
             phone: parsed.data.phone,
             email: parsed.data.email,
             message: parsed.data.message,

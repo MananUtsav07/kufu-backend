@@ -17,6 +17,7 @@ type DemoLeadNotificationPayload = {
   submittedAtIso: string
   fullName: string
   businessType: string
+  websiteUrl?: string
   phone: string
   email: string
   message: string
@@ -80,7 +81,7 @@ export function createMailer(options: MailerOptions) {
       )
     },
     async sendDemoLeadNotification(payload: DemoLeadNotificationPayload): Promise<void> {
-      const { to, submittedAtIso, fullName, businessType, phone, email, message } = payload
+      const { to, submittedAtIso, fullName, businessType, websiteUrl, phone, email, message } = payload
 
       const html = `
         <div style="font-family: Inter, Arial, sans-serif; max-width: 640px; margin: 0 auto; color: #0f172a;">
@@ -90,6 +91,7 @@ export function createMailer(options: MailerOptions) {
             <tbody>
               <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Full Name</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${fullName}</td></tr>
               <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Business Type</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${businessType}</td></tr>
+              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Website URL</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${websiteUrl || '-'}</td></tr>
               <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Phone</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${phone}</td></tr>
               <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Email</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${email}</td></tr>
               <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Requirement</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${message || '-'}</td></tr>
@@ -111,6 +113,7 @@ export function createMailer(options: MailerOptions) {
             `Submitted at: ${submittedAtIso}`,
             `Full Name: ${fullName}`,
             `Business Type: ${businessType}`,
+            `Website URL: ${websiteUrl || '-'}`,
             `Phone: ${phone}`,
             `Email: ${email}`,
             `Requirement: ${message || '-'}`,

@@ -4,6 +4,7 @@ export const demoLeadSchema = z
   .object({
     fullName: z.string().trim().min(1, 'Full name is required'),
     businessType: z.string().trim().min(1, 'Business type is required'),
+    websiteUrl: z.string().trim().max(2048).optional().default(''),
     phone: z.string().trim().min(1, 'Phone is required'),
     email: z.string().trim().email('Valid email is required'),
     message: z.string().trim().optional().default(''),
