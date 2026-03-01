@@ -134,10 +134,11 @@ async function fetchWithJina(url: string): Promise<string> {
   const response = await axios.get(`https://r.jina.ai/${url}`, {
     timeout: 30_000,
     headers: {
-      Accept: "text/plain",
+      'Accept': 'text/plain',
+      'Authorization': `Bearer ${process.env.JINA_API_KEY}`, // add this
     },
-  });
-  return typeof response.data === "string" ? response.data : "";
+  })
+  return typeof response.data === 'string' ? response.data : ''
 }
 
 async function fetchSitemapUrls(
