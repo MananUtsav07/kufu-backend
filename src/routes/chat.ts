@@ -321,7 +321,13 @@ export function createChatRouter(options: ChatRouterOptions): Router {
         context.subscription = usage.subscription;
       }
 
-      const baseKnowledge = await options.dataStore.getKnowledgeText();
+      const shouldUseGlobalKnowledge =
+        context.userRole === "admin" &&
+        (context.mode === "dashboard" || context.mode === "widget");
+
+      const baseKnowledge = shouldUseGlobalKnowledge
+        ? await options.dataStore.getKnowledgeText()
+        : "";
 
       let clientKnowledge = "";
       if (context.clientId) {
