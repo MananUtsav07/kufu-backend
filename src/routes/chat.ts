@@ -168,6 +168,12 @@ async function resolveChatContext(
       ? chatbot.allowed_domains
       : []
 
+      console.log('[domain-check] origin:', request.header('origin'))
+console.log('[domain-check] referer:', request.header('referer'))
+console.log('[domain-check] requestDomain:', requestDomain)
+console.log('[domain-check] allowedDomains:', allowedDomains)
+console.log('[domain-check] allowed:', isDomainAllowed(requestDomain, allowedDomains))
+
     if (!isDomainAllowed(requestDomain, allowedDomains)) {
       throw new AppError('Widget origin is not allowed', 403)
     }
