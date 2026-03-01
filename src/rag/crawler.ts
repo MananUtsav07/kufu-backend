@@ -1,377 +1,411 @@
-import axios from 'axios'
-import * as cheerio from 'cheerio'
-import type { Browser } from 'playwright'
+import axios from "axios";
+import * as cheerio from "cheerio";
+import type { Browser } from "playwright";
 
 export type CrawledPage = {
-  url: string
-  title: string | null
-  contentText: string
-  httpStatus: number
-}
+  url: string;
+  title: string | null;
+  contentText: string;
+  httpStatus: number;
+};
 
 type CrawlDiscoveryOptions = {
-  websiteUrl: string
-  seedUrls?: string[]
-  maxPages: number
-  fetchTimeoutMs?: number
-}
+  websiteUrl: string;
+  seedUrls?: string[];
+  maxPages: number;
+  fetchTimeoutMs?: number;
+};
 
 type FetchPageOptions = {
-  url: string
-  fetchTimeoutMs?: number
-}
+  url: string;
+  fetchTimeoutMs?: number;
+};
 
 type HttpPageResponse = {
-  status: number
-  contentType: string
-  html: string
-}
+  status: number;
+  contentType: string;
+  html: string;
+};
 
 const blockedPathFragments = [
-  '/wp-admin',
-  '/account',
-  '/checkout',
-  '/cart',
-  '/login',
-  '/signup',
-  '/auth',
-  '/admin',
-]
+  "/wp-admin",
+  "/account",
+  "/checkout",
+  "/cart",
+  "/login",
+  "/signup",
+  "/auth",
+  "/admin",
+];
 
 const skipExtensions = new Set([
-  '.pdf',
-  '.jpg',
-  '.jpeg',
-  '.png',
-  '.gif',
-  '.svg',
-  '.webp',
-  '.css',
-  '.js',
-  '.ico',
-  '.woff',
-  '.woff2',
-  '.ttf',
-  '.zip',
-  '.mp4',
-  '.mp3',
-])
+  ".pdf",
+  ".jpg",
+  ".jpeg",
+  ".png",
+  ".gif",
+  ".svg",
+  ".webp",
+  ".css",
+  ".js",
+  ".ico",
+  ".woff",
+  ".woff2",
+  ".ttf",
+  ".zip",
+  ".mp4",
+  ".mp3",
+]);
 
-const playwrightEnabled = process.env.ENABLE_PLAYWRIGHT === 'true'
-const jsRenderTimeoutMs = Number(process.env.RAG_JS_RENDER_TIMEOUT_MS ?? 15_000)
-const thinContentThreshold = 300
+const playwrightEnabled = process.env.ENABLE_PLAYWRIGHT === "true";
+const jsRenderTimeoutMs = Number(
+  process.env.RAG_JS_RENDER_TIMEOUT_MS ?? 15_000,
+);
+const thinContentThreshold = 300;
 
-let browserPromise: Promise<Browser | null> | null = null
+let browserPromise: Promise<Browser | null> | null = null;
 
 function normalizeUrl(rawUrl: string, baseUrl?: string): string | null {
   try {
-    const parsed = baseUrl ? new URL(rawUrl, baseUrl) : new URL(rawUrl)
-    parsed.hash = ''
-    parsed.search = ''
-    if (parsed.pathname.endsWith('/') && parsed.pathname !== '/') {
-      parsed.pathname = parsed.pathname.slice(0, -1)
+    const parsed = baseUrl ? new URL(rawUrl, baseUrl) : new URL(rawUrl);
+    parsed.hash = "";
+    parsed.search = "";
+    if (parsed.pathname.endsWith("/") && parsed.pathname !== "/") {
+      parsed.pathname = parsed.pathname.slice(0, -1);
     }
-    return parsed.toString()
+    return parsed.toString();
   } catch {
-    return null
+    return null;
   }
 }
 
 function getHostname(url: string): string | null {
   try {
-    return new URL(url).hostname.toLowerCase()
+    return new URL(url).hostname.toLowerCase();
   } catch {
-    return null
+    return null;
   }
 }
 
 function shouldSkipUrl(url: string): boolean {
-  const lower = url.toLowerCase()
+  const lower = url.toLowerCase();
   if (blockedPathFragments.some((fragment) => lower.includes(fragment))) {
-    return true
+    return true;
   }
 
   for (const ext of skipExtensions) {
     if (lower.endsWith(ext)) {
-      return true
+      return true;
     }
   }
 
-  return false
+  return false;
 }
 
 function extractLocTags(xml: string): string[] {
-  const matches = [...xml.matchAll(/<loc>(.*?)<\/loc>/gims)]
-  return matches.map((item) => item[1]?.trim()).filter((value): value is string => Boolean(value))
+  const matches = [...xml.matchAll(/<loc>(.*?)<\/loc>/gims)];
+  return matches
+    .map((item) => item[1]?.trim())
+    .filter((value): value is string => Boolean(value));
 }
 
-async function fetchHtmlWithAxios(url: string, timeoutMs = 12_000): Promise<HttpPageResponse> {
+async function fetchHtmlWithAxios(
+  url: string,
+  timeoutMs = 12_000,
+): Promise<HttpPageResponse> {
   const response = await axios.get<string>(url, {
     timeout: timeoutMs,
     maxRedirects: 5,
-    responseType: 'text',
+    responseType: "text",
     headers: {
-      'user-agent': 'KufuBot/1.0 (+https://kufu.ai)',
-      accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      "user-agent": "KufuBot/1.0 (+https://kufu.ai)",
+      accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     },
     validateStatus: () => true,
-  })
+  });
 
   return {
     status: response.status,
-    contentType: String(response.headers['content-type'] ?? ''),
-    html: typeof response.data === 'string' ? response.data : '',
-  }
+    contentType: String(response.headers["content-type"] ?? ""),
+    html: typeof response.data === "string" ? response.data : "",
+  };
 }
 
 function logPageEvent(args: {
-  url: string
-  status: number
-  contentType: string
-  extractedLen: number
-  usedFallback: boolean
-  skipReason: string | null
+  url: string;
+  status: number;
+  contentType: string;
+  extractedLen: number;
+  usedFallback: boolean;
+  skipReason: string | null;
 }) {
   console.info(
-    `[rag] page url=${args.url} status=${args.status} content-type="${args.contentType || 'unknown'}" extractedLen=${args.extractedLen} usedFallback=${args.usedFallback} skipReason=${args.skipReason ?? 'none'}`,
-  )
+    `[rag] page url=${args.url} status=${args.status} content-type="${args.contentType || "unknown"}" extractedLen=${args.extractedLen} usedFallback=${args.usedFallback} skipReason=${args.skipReason ?? "none"}`,
+  );
 }
 
-async function fetchSitemapUrls(rootUrl: string, fetchTimeoutMs: number): Promise<string[]> {
-  const sitemapUrl = normalizeUrl('/sitemap.xml', rootUrl)
+async function fetchSitemapUrls(
+  rootUrl: string,
+  fetchTimeoutMs: number,
+): Promise<string[]> {
+  const sitemapUrl = normalizeUrl("/sitemap.xml", rootUrl);
   if (!sitemapUrl) {
-    return []
+    return [];
   }
 
   try {
     const response = await axios.get<string>(sitemapUrl, {
       timeout: fetchTimeoutMs,
-      responseType: 'text',
+      responseType: "text",
       validateStatus: () => true,
       headers: {
-        'user-agent': 'KufuBot/1.0 (+https://kufu.ai)',
-        accept: 'application/xml,text/xml;q=0.9,*/*;q=0.8',
+        "user-agent": "KufuBot/1.0 (+https://kufu.ai)",
+        accept: "application/xml,text/xml;q=0.9,*/*;q=0.8",
       },
-    })
+    });
 
     if (response.status < 200 || response.status >= 300) {
-      return []
+      return [];
     }
 
-    const xml = typeof response.data === 'string' ? response.data : ''
-    return extractLocTags(xml)
+    const xml = typeof response.data === "string" ? response.data : "";
+    return extractLocTags(xml);
   } catch {
-    return []
+    return [];
   }
 }
 
 async function getPlaywrightBrowser(): Promise<Browser | null> {
   if (!playwrightEnabled) {
-    return null
+    console.log("[playwright] disabled via env");
+    return null;
   }
 
   if (!browserPromise) {
     browserPromise = (async () => {
       try {
-        const playwright = await import('playwright')
+        const playwright = await import("playwright");
         const browser = await playwright.chromium.launch({
-          args: ['--no-sandbox', '--disable-setuid-sandbox'],
+          args: ["--no-sandbox", "--disable-setuid-sandbox"],
           headless: true,
-        })
-        return browser
-      } catch {
-        return null
+        });
+        console.log("[playwright] browser launched successfully");
+        return browser;
+      } catch (err) {
+        console.log("[playwright] failed to launch:", err);
+        return null;
       }
-    })()
+    })();
   }
 
-  return browserPromise
+  return browserPromise;
 }
 
 async function renderPageWithPlaywright(url: string): Promise<{
-  text: string
-  links: string[]
+  text: string;
+  links: string[];
 } | null> {
-  const browser = await getPlaywrightBrowser()
+  const browser = await getPlaywrightBrowser();
   if (!browser) {
-    return null
+    console.log("[playwright] no browser available, skipping render");
+    return null;
   }
+  console.log("[playwright] rendering:", url);
 
   const page = await browser.newPage({
-    userAgent: 'KufuBot/1.0 (+https://kufu.ai)',
-  })
+    userAgent: "KufuBot/1.0 (+https://kufu.ai)",
+  });
 
   try {
     await page.goto(url, {
-      waitUntil: 'domcontentloaded',
+      waitUntil: "domcontentloaded",
       timeout: jsRenderTimeoutMs,
-    })
-    await page.waitForLoadState('networkidle', {
-      timeout: Math.min(4_000, jsRenderTimeoutMs),
-    }).catch(() => undefined)
+    });
+    await page
+      .waitForLoadState("networkidle", {
+        timeout: Math.min(4_000, jsRenderTimeoutMs),
+      })
+      .catch(() => undefined);
 
     const [text, links] = await Promise.all([
-      page.evaluate(() => document.body?.innerText?.replace(/\s+/g, ' ').trim() ?? ''),
+      page.evaluate(
+        () => document.body?.innerText?.replace(/\s+/g, " ").trim() ?? "",
+      ),
       page.evaluate(() =>
-        Array.from(document.querySelectorAll('a[href]'))
-          .map((anchor) => anchor.getAttribute('href') ?? '')
+        Array.from(document.querySelectorAll("a[href]"))
+          .map((anchor) => anchor.getAttribute("href") ?? "")
           .filter((href) => href.length > 0),
       ),
-    ])
+    ]);
 
-    return { text, links }
+    return { text, links };
   } catch {
-    return null
+    return null;
   } finally {
-    await page.close().catch(() => undefined)
+    await page.close().catch(() => undefined);
   }
 }
 
-function extractInternalLinks(html: string, pageUrl: string, rootHost: string): string[] {
-  const $ = cheerio.load(html)
-  const links: string[] = []
+function extractInternalLinks(
+  html: string,
+  pageUrl: string,
+  rootHost: string,
+): string[] {
+  const $ = cheerio.load(html);
+  const links: string[] = [];
 
-  $('a[href]').each((_index, element) => {
-    const href = $(element).attr('href')
+  $("a[href]").each((_index, element) => {
+    const href = $(element).attr("href");
     if (!href) {
-      return
+      return;
     }
 
-    const normalized = normalizeUrl(href, pageUrl)
+    const normalized = normalizeUrl(href, pageUrl);
     if (!normalized) {
-      return
+      return;
     }
 
     if (getHostname(normalized) !== rootHost) {
-      return
+      return;
     }
 
     if (shouldSkipUrl(normalized)) {
-      return
+      return;
     }
 
-    links.push(normalized)
-  })
+    links.push(normalized);
+  });
 
-  return links
+  return links;
 }
 
-export async function discoverWebsiteUrls(options: CrawlDiscoveryOptions): Promise<string[]> {
-  const maxPages = Math.max(1, Math.min(options.maxPages, 200))
-  const rootUrl = normalizeUrl(options.websiteUrl)
+export async function discoverWebsiteUrls(
+  options: CrawlDiscoveryOptions,
+): Promise<string[]> {
+  const maxPages = Math.max(1, Math.min(options.maxPages, 200));
+  const rootUrl = normalizeUrl(options.websiteUrl);
   if (!rootUrl) {
-    throw new Error('Invalid website URL')
+    throw new Error("Invalid website URL");
   }
 
-  const rootHost = getHostname(rootUrl)
+  const rootHost = getHostname(rootUrl);
   if (!rootHost) {
-    throw new Error('Invalid website host')
+    throw new Error("Invalid website host");
   }
 
-  const fetchTimeoutMs = options.fetchTimeoutMs ?? 12_000
-  const dedup = new Set<string>([rootUrl])
+  const fetchTimeoutMs = options.fetchTimeoutMs ?? 12_000;
+  const dedup = new Set<string>([rootUrl]);
 
   for (const rawSeed of options.seedUrls ?? []) {
-    const normalized = normalizeUrl(rawSeed, rootUrl)
+    const normalized = normalizeUrl(rawSeed, rootUrl);
     if (!normalized) {
-      continue
+      continue;
     }
     if (getHostname(normalized) !== rootHost) {
-      continue
+      continue;
     }
     if (shouldSkipUrl(normalized)) {
-      continue
+      continue;
     }
-    dedup.add(normalized)
+    dedup.add(normalized);
     if (dedup.size >= maxPages) {
-      return Array.from(dedup).slice(0, maxPages)
+      return Array.from(dedup).slice(0, maxPages);
     }
   }
 
-  const sitemapUrls = await fetchSitemapUrls(rootUrl, fetchTimeoutMs)
+  const sitemapUrls = await fetchSitemapUrls(rootUrl, fetchTimeoutMs);
   for (const raw of sitemapUrls) {
-    const normalized = normalizeUrl(raw, rootUrl)
+    const normalized = normalizeUrl(raw, rootUrl);
     if (!normalized) {
-      continue
+      continue;
     }
     if (getHostname(normalized) !== rootHost) {
-      continue
+      continue;
     }
     if (shouldSkipUrl(normalized)) {
-      continue
+      continue;
     }
-    dedup.add(normalized)
+    dedup.add(normalized);
     if (dedup.size >= maxPages) {
-      return Array.from(dedup).slice(0, maxPages)
+      return Array.from(dedup).slice(0, maxPages);
     }
   }
 
-  const queue: string[] = Array.from(dedup)
-  const visited = new Set<string>()
+  const queue: string[] = Array.from(dedup);
+  const visited = new Set<string>();
 
   while (queue.length > 0 && dedup.size < maxPages) {
-    const current = queue.shift()
+    const current = queue.shift();
     if (!current) {
-      break
+      break;
     }
     if (visited.has(current)) {
-      continue
+      continue;
     }
-    visited.add(current)
+    visited.add(current);
 
     try {
-      const response = await fetchHtmlWithAxios(current, fetchTimeoutMs)
-      if (response.status < 200 || response.status >= 300 || !response.contentType.toLowerCase().includes('text/html')) {
-        continue
+      const response = await fetchHtmlWithAxios(current, fetchTimeoutMs);
+      if (
+        response.status < 200 ||
+        response.status >= 300 ||
+        !response.contentType.toLowerCase().includes("text/html")
+      ) {
+        continue;
       }
 
-      let links = extractInternalLinks(response.html, current, rootHost)
+      let links = extractInternalLinks(response.html, current, rootHost);
       if (links.length === 0) {
-        const rendered = await renderPageWithPlaywright(current)
+        const rendered = await renderPageWithPlaywright(current);
         if (rendered) {
           links = rendered.links
             .map((href) => normalizeUrl(href, current))
             .filter((value): value is string => Boolean(value))
             .filter((url) => getHostname(url) === rootHost)
-            .filter((url) => !shouldSkipUrl(url))
+            .filter((url) => !shouldSkipUrl(url));
         }
       }
 
       for (const link of links) {
         if (dedup.has(link)) {
-          continue
+          continue;
         }
-        dedup.add(link)
-        queue.push(link)
+        dedup.add(link);
+        queue.push(link);
         if (dedup.size >= maxPages) {
-          break
+          break;
         }
       }
     } catch {
-      continue
+      continue;
     }
   }
 
-  return Array.from(dedup).slice(0, maxPages)
+  return Array.from(dedup).slice(0, maxPages);
 }
 
-export async function fetchAndExtractPage(options: FetchPageOptions): Promise<CrawledPage> {
-  let response: HttpPageResponse
+export async function fetchAndExtractPage(
+  options: FetchPageOptions,
+): Promise<CrawledPage> {
+  let response: HttpPageResponse;
   try {
-    response = await fetchHtmlWithAxios(options.url, options.fetchTimeoutMs ?? 12_000)
+    response = await fetchHtmlWithAxios(
+      options.url,
+      options.fetchTimeoutMs ?? 12_000,
+    );
   } catch (error) {
     logPageEvent({
       url: options.url,
       status: 0,
-      contentType: '',
+      contentType: "",
       extractedLen: 0,
       usedFallback: false,
-      skipReason: error instanceof Error ? error.message : 'fetch_failed',
-    })
-    throw error
+      skipReason: error instanceof Error ? error.message : "fetch_failed",
+    });
+    throw error;
   }
-  console.log('Raw HTML length:', response.html.length)
-console.log('First 500 chars:', response.html.slice(0, 500))
+  console.log("Raw HTML length:", response.html.length);
+  console.log("First 500 chars:", response.html.slice(0, 500));
 
   if (response.status < 200 || response.status >= 300) {
     logPageEvent({
@@ -381,64 +415,69 @@ console.log('First 500 chars:', response.html.slice(0, 500))
       extractedLen: 0,
       usedFallback: false,
       skipReason: `http_${response.status}`,
-    })
-    throw new Error(`HTTP ${response.status}`)
+    });
+    throw new Error(`HTTP ${response.status}`);
   }
 
-  if (!response.contentType.toLowerCase().includes('text/html')) {
+  if (!response.contentType.toLowerCase().includes("text/html")) {
     logPageEvent({
       url: options.url,
       status: response.status,
       contentType: response.contentType,
       extractedLen: 0,
       usedFallback: false,
-      skipReason: 'unsupported_content_type',
-    })
-    throw new Error(`Unsupported content-type: ${response.contentType || 'unknown'}`)
+      skipReason: "unsupported_content_type",
+    });
+    throw new Error(
+      `Unsupported content-type: ${response.contentType || "unknown"}`,
+    );
   }
 
-  const $ = cheerio.load(response.html)
-  $('script, style, noscript, svg').remove()
+  const $ = cheerio.load(response.html);
+  $("script, style, noscript, svg").remove();
 
-  const title = $('title').first().text().trim() || null
+  const title = $("title").first().text().trim() || null;
   const metaDescription =
-    $('meta[name="description"]').attr('content')?.trim() ||
-    $('meta[property="og:description"]').attr('content')?.trim() ||
-    ''
-  const headings = $('h1, h2, h3')
+    $('meta[name="description"]').attr("content")?.trim() ||
+    $('meta[property="og:description"]').attr("content")?.trim() ||
+    "";
+  const headings = $("h1, h2, h3")
     .map((_index, element) => $(element).text().trim())
     .get()
     .filter(Boolean)
-    .join(' ')
+    .join(" ");
 
-  let contentText = $('body').text().replace(/\s+/g, ' ').trim()
-  let usedFallback = false
+  let contentText = $("body").text().replace(/\s+/g, " ").trim();
+  let usedFallback = false;
 
   if (contentText.length < thinContentThreshold) {
-    contentText = [contentText, title ?? '', metaDescription, headings]
+    contentText = [contentText, title ?? "", metaDescription, headings]
       .filter(Boolean)
-      .join('\n')
-      .replace(/\s+/g, ' ')
-      .trim()
-    usedFallback = true
+      .join("\n")
+      .replace(/\s+/g, " ")
+      .trim();
+    usedFallback = true;
   }
 
   if (contentText.length < thinContentThreshold) {
-    const rendered = await renderPageWithPlaywright(options.url)
+    const rendered = await renderPageWithPlaywright(options.url);
     if (rendered && rendered.text.trim().length > contentText.length) {
-      contentText = rendered.text.trim()
-      usedFallback = true
+      contentText = rendered.text.trim();
+      usedFallback = true;
     }
   }
 
   if (!contentText) {
-    contentText = [title ?? '', metaDescription, headings].filter(Boolean).join(' ').trim()
-    usedFallback = true
+    contentText = [title ?? "", metaDescription, headings]
+      .filter(Boolean)
+      .join(" ")
+      .trim();
+    usedFallback = true;
   }
 
   if (!contentText) {
-    contentText = `Source URL: ${options.url}`
-    usedFallback = true
+    contentText = `Source URL: ${options.url}`;
+    usedFallback = true;
   }
 
   logPageEvent({
@@ -448,12 +487,12 @@ console.log('First 500 chars:', response.html.slice(0, 500))
     extractedLen: contentText.length,
     usedFallback,
     skipReason: null,
-  })
+  });
 
   return {
     url: options.url,
     title,
     contentText,
     httpStatus: response.status,
-  }
+  };
 }
