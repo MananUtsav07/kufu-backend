@@ -25,6 +25,7 @@ type ApiRouterOptions = {
   supabaseAdminClient: SupabaseClient | null;
   jwtSecret: string;
   brevoApiKey: string;
+  contactLeadNotifyEmail: string;
   demoLeadNotifyEmail: string;
   emailFrom: string;
   dataStore: DataStore;
@@ -170,6 +171,28 @@ export function createApiRouter(options: ApiRouterOptions): Router {
         ts: getTimestamp(),
         ...parsed.data,
       });
+
+      if (mailer) {
+        try {
+          await mailer.sendContactLeadNotification({
+            to: options.contactLeadNotifyEmail,
+            submittedAtIso: new Date().toISOString(),
+            firstName: parsed.data.firstName,
+            lastName: parsed.data.lastName,
+            email: parsed.data.email,
+            message: parsed.data.message,
+          })
+        } catch (mailError) {
+          console.error(
+            JSON.stringify({
+              level: 'error',
+              type: 'contact_email_send_failed',
+              path: '/api/leads/contact',
+              message: mailError instanceof Error ? mailError.message : 'Unknown contact email error',
+            }),
+          )
+        }
+      }
 
       response.json({ ok: true });
     } catch (error) {

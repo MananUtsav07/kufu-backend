@@ -22,6 +22,15 @@ type DemoLeadNotificationPayload = {
   message: string
 }
 
+type ContactLeadNotificationPayload = {
+  to: string
+  submittedAtIso: string
+  firstName: string
+  lastName: string
+  email: string
+  message: string
+}
+
 export function createMailer(options: MailerOptions) {
   const { brevoApiKey, emailFrom } = options
 
@@ -105,6 +114,48 @@ export function createMailer(options: MailerOptions) {
             `Phone: ${phone}`,
             `Email: ${email}`,
             `Requirement: ${message || '-'}`,
+          ].join('\n'),
+        },
+        {
+          headers: {
+            'api-key': brevoApiKey,
+            'Content-Type': 'application/json',
+          },
+        },
+      )
+    },
+    async sendContactLeadNotification(payload: ContactLeadNotificationPayload): Promise<void> {
+      const { to, submittedAtIso, firstName, lastName, email, message } = payload
+      const fullName = `${firstName} ${lastName}`.trim()
+
+      const html = `
+        <div style="font-family: Inter, Arial, sans-serif; max-width: 640px; margin: 0 auto; color: #0f172a;">
+          <h2 style="margin-bottom: 12px;">New Kufu Contact Message</h2>
+          <p style="margin-bottom: 16px; color: #334155;">Submitted at: ${submittedAtIso}</p>
+          <table style="border-collapse: collapse; width: 100%; font-size: 14px;">
+            <tbody>
+              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Name</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${fullName || '-'}</td></tr>
+              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Email</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${email}</td></tr>
+              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Message</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${message || '-'}</td></tr>
+            </tbody>
+          </table>
+        </div>
+      `
+
+      await axios.post(
+        'https://api.brevo.com/v3/smtp/email',
+        {
+          sender: { name: 'Kufu', email: emailFrom },
+          to: [{ email: to }],
+          replyTo: { email },
+          subject: 'New Contact Message - Kufu',
+          htmlContent: html,
+          textContent: [
+            'New Kufu Contact Message',
+            `Submitted at: ${submittedAtIso}`,
+            `Name: ${fullName || '-'}`,
+            `Email: ${email}`,
+            `Message: ${message || '-'}`,
           ].join('\n'),
         },
         {
