@@ -49,4 +49,6 @@ export const supabaseAdminClient = createSupabaseAdminClient({
 export const jwtSecret = process.env.JWT_SECRET?.trim() ?? ''
 export const brevoApiKey = process.env.BREVO_API_KEY?.trim() ?? ''
 export const emailFrom = process.env.EMAIL_FROM?.trim() ?? ''
+export const demoLeadNotifyEmail =
+  process.env.DEMO_LEAD_NOTIFY_EMAIL?.trim() || 'kufuchatbot@gmail.com'
 export const devBypassEmailVerify = process.env.DEV_BYPASS_EMAIL_VERIFY === 'true'

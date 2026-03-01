@@ -24,8 +24,9 @@ type ApiRouterOptions = {
   openAiClient: OpenAI | null;
   supabaseAdminClient: SupabaseClient | null;
   jwtSecret: string;
-  brevoApiKey: string
-emailFrom: string
+  brevoApiKey: string;
+  demoLeadNotifyEmail: string;
+  emailFrom: string;
   dataStore: DataStore;
   allowDevBypassEmailVerify: boolean;
 };
@@ -128,6 +129,29 @@ export function createApiRouter(options: ApiRouterOptions): Router {
         ts: getTimestamp(),
         ...parsed.data,
       });
+
+      if (mailer) {
+        try {
+          await mailer.sendDemoLeadNotification({
+            to: options.demoLeadNotifyEmail,
+            submittedAtIso: new Date().toISOString(),
+            fullName: parsed.data.fullName,
+            businessType: parsed.data.businessType,
+            phone: parsed.data.phone,
+            email: parsed.data.email,
+            message: parsed.data.message,
+          })
+        } catch (mailError) {
+          console.error(
+            JSON.stringify({
+              level: 'error',
+              type: 'lead_email_send_failed',
+              path: '/api/leads/demo',
+              message: mailError instanceof Error ? mailError.message : 'Unknown lead email error',
+            }),
+          )
+        }
+      }
 
       response.json({ ok: true });
     } catch (error) {
