@@ -173,6 +173,14 @@ export type UsageCheckResult = {
   subscription: SubscriptionRow | null
 }
 
+export type UserPlanContext = {
+  role: UserRole
+  plan: PlanRow | null
+  subscription: SubscriptionRow | null
+  planCode: string
+  isStarterPlus: boolean
+}
+
 export async function enforcePlanMessageLimit(
   supabaseAdminClient: SupabaseClient,
   userId: string,
@@ -252,6 +260,42 @@ export function resolveChatbotLimitForPlan(plan: PlanRow | null, role: UserRole)
   return plan.chatbot_limit ?? 1
 }
 
+export function isStarterPlusPlan(planCode: string, role: UserRole): boolean {
+  if (role === 'admin') {
+    return true
+  }
+
+  return planCode === 'starter' || planCode === 'pro' || planCode === 'business'
+}
+
+export async function getUserPlanContext(
+  supabaseAdminClient: SupabaseClient,
+  userId: string,
+  role: UserRole,
+): Promise<UserPlanContext> {
+  if (role === 'admin') {
+    return {
+      role,
+      plan: null,
+      subscription: null,
+      planCode: 'admin',
+      isStarterPlus: true,
+    }
+  }
+
+  const subscription = await ensureSubscription(supabaseAdminClient, userId)
+  const rolledSubscription = await rollSubscriptionPeriodIfNeeded(supabaseAdminClient, subscription)
+  const plan = await loadPlanByCode(supabaseAdminClient, rolledSubscription.plan_code)
+
+  return {
+    role,
+    plan,
+    subscription: rolledSubscription,
+    planCode: plan.code,
+    isStarterPlus: isStarterPlusPlan(plan.code, role),
+  }
+}
+
 export async function setSubscriptionPlan(
   supabaseAdminClient: SupabaseClient,
   userId: string,
@@ -259,12 +303,16 @@ export async function setSubscriptionPlan(
 ): Promise<SubscriptionRow> {
   await loadPlanByCode(supabaseAdminClient, planCode)
   const currentSubscription = await ensureSubscription(supabaseAdminClient, userId)
+  const nextPeriod = createPeriodWindow(new Date())
 
   const { data: updatedSubscription, error: updateError } = await supabaseAdminClient
     .from('subscriptions')
     .update({
       plan_code: planCode,
       status: DEFAULT_SUBSCRIPTION_STATUS,
+      current_period_start: nextPeriod.start,
+      current_period_end: nextPeriod.end,
+      message_count_in_period: 0,
       updated_at: new Date().toISOString(),
     })
     .eq('id', currentSubscription.id)

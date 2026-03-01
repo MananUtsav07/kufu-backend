@@ -30,6 +30,8 @@ export type ChatbotRow = {
   website_url: string | null
   allowed_domains: string[]
   widget_public_key: string
+  logo_path: string | null
+  logo_updated_at: string | null
   is_active: boolean
   branding: Record<string, unknown> | null
   created_at: string
@@ -200,7 +202,9 @@ export async function loadChatbotByPublicKey(
 ): Promise<ChatbotRow | null> {
   const { data, error } = await supabaseAdminClient
     .from('chatbots')
-    .select('id, user_id, client_id, name, website_url, allowed_domains, widget_public_key, is_active, branding, created_at, updated_at')
+    .select(
+      'id, user_id, client_id, name, website_url, allowed_domains, widget_public_key, logo_path, logo_updated_at, is_active, branding, created_at, updated_at',
+    )
     .eq('widget_public_key', widgetPublicKey)
     .maybeSingle<ChatbotRow>()
 
@@ -217,7 +221,9 @@ export async function loadChatbotById(
 ): Promise<ChatbotRow | null> {
   const { data, error } = await supabaseAdminClient
     .from('chatbots')
-    .select('id, user_id, client_id, name, website_url, allowed_domains, widget_public_key, is_active, branding, created_at, updated_at')
+    .select(
+      'id, user_id, client_id, name, website_url, allowed_domains, widget_public_key, logo_path, logo_updated_at, is_active, branding, created_at, updated_at',
+    )
     .eq('id', chatbotId)
     .maybeSingle<ChatbotRow>()
 
@@ -234,7 +240,9 @@ export async function loadUserChatbots(
 ): Promise<ChatbotRow[]> {
   const { data, error } = await supabaseAdminClient
     .from('chatbots')
-    .select('id, user_id, client_id, name, website_url, allowed_domains, widget_public_key, is_active, branding, created_at, updated_at')
+    .select(
+      'id, user_id, client_id, name, website_url, allowed_domains, widget_public_key, logo_path, logo_updated_at, is_active, branding, created_at, updated_at',
+    )
     .eq('user_id', userId)
     .order('created_at', { ascending: true })
     .returns<ChatbotRow[]>()
@@ -272,10 +280,14 @@ export async function ensureDefaultChatbot(
       website_url: args.websiteUrl,
       allowed_domains: allowedDomains,
       widget_public_key: key,
+      logo_path: null,
+      logo_updated_at: null,
       is_active: true,
       branding: {},
     })
-    .select('id, user_id, client_id, name, website_url, allowed_domains, widget_public_key, is_active, branding, created_at, updated_at')
+    .select(
+      'id, user_id, client_id, name, website_url, allowed_domains, widget_public_key, logo_path, logo_updated_at, is_active, branding, created_at, updated_at',
+    )
     .single<ChatbotRow>()
 
   if (error || !data) {

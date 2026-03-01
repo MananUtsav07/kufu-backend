@@ -167,6 +167,7 @@ Base URL (dev): `http://localhost:8787`
     "business_name": "Acme Clinic",
     "theme": "dark",
     "greeting": "Hi, welcome...",
+    "logo_url": "https://...signed-url...",
     "allowed_domains": ["acme.example"]
   }
 }
@@ -234,6 +235,78 @@ Auth: Bearer JWT (user/admin)
 
 ### `DELETE /api/dashboard/chatbots/:id`
 
+### `GET /api/dashboard/chatbots/:id/logo`
+- Returns signed logo URL for private storage object.
+- Response:
+```json
+{ "ok": true, "logoUrl": "https://...signed-url..." }
+```
+
+### `POST /api/dashboard/chatbots/:id/logo`
+- Auth: user owns chatbot or admin
+- Plan gate: `starter/pro/business` (admin bypass)
+- Content-Type: `multipart/form-data`, field `file`
+- Allowed: `image/png`, `image/jpeg`, `image/webp`, `image/svg+xml` (max 2MB)
+- Response:
+```json
+{ "ok": true, "logoUrl": "https://...signed-url..." }
+```
+
+### `DELETE /api/dashboard/chatbots/:id/logo`
+- Auth: user owns chatbot or admin
+- Plan gate: `starter/pro/business` (admin bypass)
+- Response:
+```json
+{ "ok": true }
+```
+
+### `GET /api/dashboard/chatbots/:id/kb-files`
+- Lists KB files for a chatbot.
+- Response:
+```json
+{
+  "ok": true,
+  "files": [
+    {
+      "id": "uuid",
+      "chatbot_id": "uuid",
+      "user_id": "uuid",
+      "filename": "faq.pdf",
+      "mime_type": "application/pdf",
+      "storage_path": "kb/user/chatbot/123_faq.pdf",
+      "file_size": 120033,
+      "created_at": "2026-03-01T00:00:00.000Z"
+    }
+  ]
+}
+```
+
+### `POST /api/dashboard/chatbots/:id/kb-files`
+- Auth: user owns chatbot or admin
+- Plan gate: `starter/pro/business` (admin bypass)
+- Content-Type: `multipart/form-data`, field `file`
+- Allowed: `application/pdf`, `application/msword`, `application/vnd.openxmlformats-officedocument.wordprocessingml.document` (max 10MB)
+- Response:
+```json
+{
+  "ok": true,
+  "file": {
+    "id": "uuid",
+    "filename": "pricing.docx",
+    "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "file_size": 88912,
+    "created_at": "2026-03-01T00:00:00.000Z"
+  }
+}
+```
+
+### `DELETE /api/dashboard/kb-files/:fileId`
+- Auth: file owner or admin
+- Response:
+```json
+{ "ok": true }
+```
+
 ### `GET /api/dashboard/embed/:chatbotId`
 - Response:
 ```json
@@ -297,6 +370,37 @@ Auth: Bearer JWT (user/admin)
 Auth: Bearer JWT (admin role only)
 
 ### `GET /api/admin/overview`
+
+### `GET /api/admin/users`
+- Returns all users with current plan and period usage.
+- Response:
+```json
+{
+  "ok": true,
+  "users": [
+    {
+      "id": "uuid",
+      "email": "owner@example.com",
+      "role": "user",
+      "is_verified": true,
+      "created_at": "2026-03-01T00:00:00.000Z",
+      "currentPlanCode": "starter",
+      "messageUsageThisPeriod": 42
+    }
+  ]
+}
+```
+
+### `POST /api/admin/users/:userId/plan`
+- Body:
+```json
+{ "planCode": "pro" }
+```
+- Effect: sets active subscription plan and resets current period usage window.
+- Response:
+```json
+{ "ok": true, "subscription": { "id": "uuid", "plan_code": "pro" } }
+```
 
 ### `GET /api/admin/messages?limit=&offset=&user_id=&chatbot_id=&from=&to=`
 

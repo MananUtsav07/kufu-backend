@@ -9,6 +9,7 @@ import {
   adminQuotePatchSchema,
   adminSetPlanSchema,
   adminTicketPatchSchema,
+  adminUserPlanUpdateSchema,
 } from '../schemas/admin.js'
 import { writeAuditLog } from '../services/auditService.js'
 import {
@@ -58,11 +59,119 @@ function toSingleParam(value: string | string[] | undefined): string | null {
   return null
 }
 
+type AdminUserRow = {
+  id: string
+  email: string
+  role: 'user' | 'admin'
+  is_verified: boolean
+  created_at: string
+}
+
+type AdminSubscriptionRow = {
+  user_id: string
+  plan_code: string
+  message_count_in_period: number
+  current_period_end: string
+  status: string
+}
+
 export function createAdminRouter(options: AdminRouterOptions): Router {
   const router = Router()
 
   router.use(authMiddleware(options.jwtSecret))
   router.use(requireAdmin)
+
+  router.get(
+    '/users',
+    asyncHandler(async (_request, response) => {
+      const [{ data: users, error: usersError }, { data: subscriptions, error: subscriptionsError }] =
+        await Promise.all([
+          options.supabaseAdminClient
+            .from('users')
+            .select('id, email, role, is_verified, created_at')
+            .order('created_at', { ascending: false })
+            .returns<AdminUserRow[]>(),
+          options.supabaseAdminClient
+            .from('subscriptions')
+            .select('user_id, plan_code, message_count_in_period, current_period_end, status')
+            .returns<AdminSubscriptionRow[]>(),
+        ])
+
+      if (usersError || subscriptionsError) {
+        throw new AppError('Failed to load users list', 500, usersError ?? subscriptionsError)
+      }
+
+      const subscriptionByUserId = new Map<string, AdminSubscriptionRow>()
+      for (const subscription of subscriptions ?? []) {
+        const existing = subscriptionByUserId.get(subscription.user_id)
+        if (!existing) {
+          subscriptionByUserId.set(subscription.user_id, subscription)
+          continue
+        }
+
+        if (new Date(subscription.current_period_end) > new Date(existing.current_period_end)) {
+          subscriptionByUserId.set(subscription.user_id, subscription)
+        }
+      }
+
+      const items = (users ?? []).map((user) => {
+        const subscription = subscriptionByUserId.get(user.id)
+        return {
+          id: user.id,
+          email: user.email,
+          role: user.role,
+          is_verified: user.is_verified,
+          created_at: user.created_at,
+          currentPlanCode: subscription?.plan_code ?? 'free',
+          messageUsageThisPeriod: subscription?.message_count_in_period ?? 0,
+        }
+      })
+
+      response.json({
+        ok: true,
+        users: items,
+      })
+    }),
+  )
+
+  router.post(
+    '/users/:userId/plan',
+    asyncHandler(async (request, response) => {
+      const parsed = adminUserPlanUpdateSchema.safeParse(request.body)
+      if (!parsed.success) {
+        return respondValidationError(parsed.error, response)
+      }
+
+      const userId = toSingleParam(request.params.userId)
+      if (!userId) {
+        throw new AppError('userId is required', 400)
+      }
+
+      const user = await loadUserById(options.supabaseAdminClient, userId)
+      if (!user) {
+        throw new AppError('User not found', 404)
+      }
+
+      const subscription = await setSubscriptionPlan(options.supabaseAdminClient, userId, parsed.data.planCode)
+
+      await options.supabaseAdminClient
+        .from('clients')
+        .update({ plan: parsed.data.planCode })
+        .eq('user_id', userId)
+
+      await writeAuditLog({
+        supabaseAdminClient: options.supabaseAdminClient,
+        actorUserId: asAuthenticatedRequest(request).user.userId,
+        action: 'admin.user.set_plan',
+        metadata: {
+          userId,
+          planCode: parsed.data.planCode,
+        },
+      })
+
+      response.json({ ok: true, subscription })
+    }),
+  )
 
   router.get(
     '/overview',

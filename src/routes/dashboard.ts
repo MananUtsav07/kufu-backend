@@ -1,5 +1,6 @@
-﻿import { Router } from 'express'
+import { Router } from 'express'
 import type { SupabaseClient } from '@supabase/supabase-js'
+import multer from 'multer'
 
 import { authMiddleware, type AuthenticatedRequest } from '../lib/auth-middleware.js'
 import { asyncHandler, AppError } from '../lib/errors.js'
@@ -30,9 +31,20 @@ import {
 import {
   ensureSubscription,
   enforcePlanMessageLimit,
+  getUserPlanContext,
   loadPlanByCode,
   resolveChatbotLimitForPlan,
 } from '../services/subscriptionService.js'
+import {
+  buildKbStoragePath,
+  buildLogoStoragePath,
+  createSignedStorageUrl,
+  KB_DOCS_BUCKET,
+  LOGO_BUCKET,
+  removeObjectFromStorage,
+  uploadBufferToStorage,
+} from '../services/storageService.js'
+
 
 type DashboardRouterOptions = {
   jwtSecret: string
@@ -63,6 +75,34 @@ type ClientKnowledgeRow = {
   updated_at: string
 }
 
+type KbFileRow = {
+  id: string
+  chatbot_id: string
+  user_id: string
+  filename: string
+  mime_type: string
+  storage_path: string
+  file_size: number
+  created_at: string
+}
+
+const BYTES_IN_MB = 1024 * 1024
+const MAX_LOGO_SIZE_BYTES = 2 * BYTES_IN_MB
+const MAX_KB_FILE_SIZE_BYTES = 10 * BYTES_IN_MB
+
+const ALLOWED_LOGO_MIME_TYPES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/webp',
+  'image/svg+xml',
+])
+
+const ALLOWED_KB_MIME_TYPES = new Set([
+  'application/pdf',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+])
+
 function asAuthenticatedRequest(request: unknown): AuthenticatedRequest {
   return request as AuthenticatedRequest
 }
@@ -83,8 +123,32 @@ function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/, '')
 }
 
+function parseUploadedFile(request: AuthenticatedRequest): Express.Multer.File {
+  const file = request.file
+  if (!file) {
+    throw new AppError('File is required. Use multipart/form-data field "file".', 400)
+  }
+
+  return file
+}
+
+function assertStarterPlusUploadAccess(params: {
+  role: AuthenticatedRequest['user']['role']
+  planCode: string
+}) {
+  if (params.role === 'admin') {
+    return
+  }
+
+  const starterPlusPlans = new Set(['starter', 'pro', 'business'])
+  if (!starterPlusPlans.has(params.planCode)) {
+    throw new AppError('Upgrade required', 403)
+  }
+}
+
 export function createDashboardRouter(options: DashboardRouterOptions): Router {
   const router = Router()
+  const uploadParser = multer({ storage: multer.memoryStorage() })
 
   router.use(authMiddleware(options.jwtSecret))
 
@@ -319,10 +383,14 @@ export function createDashboardRouter(options: DashboardRouterOptions): Router {
           website_url: parsed.data.website_url?.trim() || null,
           allowed_domains: allowedDomains,
           widget_public_key: createWidgetPublicKey(),
+          logo_path: null,
+          logo_updated_at: null,
           is_active: parsed.data.is_active ?? true,
           branding: {},
         })
-        .select('id, user_id, client_id, name, website_url, allowed_domains, widget_public_key, is_active, branding, created_at, updated_at')
+        .select(
+          'id, user_id, client_id, name, website_url, allowed_domains, widget_public_key, logo_path, logo_updated_at, is_active, branding, created_at, updated_at',
+        )
         .single()
 
       if (error || !data) {
@@ -355,7 +423,9 @@ export function createDashboardRouter(options: DashboardRouterOptions): Router {
 
       const authRequest = asAuthenticatedRequest(request)
       const existingChatbot = await loadChatbotById(options.supabaseAdminClient, chatbotId)
-      if (!existingChatbot || existingChatbot.user_id !== authRequest.user.userId) {
+      const isOwner = existingChatbot?.user_id === authRequest.user.userId
+      const canManageChatbot = authRequest.user.role === 'admin' || isOwner
+      if (!existingChatbot || !canManageChatbot) {
         throw new AppError('Chatbot not found', 404)
       }
 
@@ -377,13 +447,19 @@ export function createDashboardRouter(options: DashboardRouterOptions): Router {
       }
       payload.updated_at = new Date().toISOString()
 
-      const { data, error } = await options.supabaseAdminClient
+      let updateQuery = options.supabaseAdminClient
         .from('chatbots')
         .update(payload)
         .eq('id', chatbotId)
-        .eq('user_id', authRequest.user.userId)
-        .select('id, user_id, client_id, name, website_url, allowed_domains, widget_public_key, is_active, branding, created_at, updated_at')
-        .single()
+        .select(
+          'id, user_id, client_id, name, website_url, allowed_domains, widget_public_key, logo_path, logo_updated_at, is_active, branding, created_at, updated_at',
+        )
+
+      if (authRequest.user.role !== 'admin') {
+        updateQuery = updateQuery.eq('user_id', authRequest.user.userId)
+      }
+
+      const { data, error } = await updateQuery.single()
 
       if (error || !data) {
         throw new AppError('Failed to update chatbot', 500, error)
@@ -402,12 +478,27 @@ export function createDashboardRouter(options: DashboardRouterOptions): Router {
       }
 
       const authRequest = asAuthenticatedRequest(request)
+      const chatbot = await loadChatbotById(options.supabaseAdminClient, chatbotId)
+      const isOwner = chatbot?.user_id === authRequest.user.userId
+      const canManageChatbot = authRequest.user.role === 'admin' || isOwner
+      if (!chatbot || !canManageChatbot) {
+        throw new AppError('Chatbot not found', 404)
+      }
 
-      const { error } = await options.supabaseAdminClient
-        .from('chatbots')
-        .delete()
-        .eq('id', chatbotId)
-        .eq('user_id', authRequest.user.userId)
+      if (chatbot.logo_path) {
+        await removeObjectFromStorage({
+          supabaseAdminClient: options.supabaseAdminClient,
+          bucket: LOGO_BUCKET,
+          storagePath: chatbot.logo_path,
+        })
+      }
+
+      let deleteQuery = options.supabaseAdminClient.from('chatbots').delete().eq('id', chatbotId)
+      if (authRequest.user.role !== 'admin') {
+        deleteQuery = deleteQuery.eq('user_id', authRequest.user.userId)
+      }
+
+      const { error } = await deleteQuery
 
       if (error) {
         throw new AppError('Failed to delete chatbot', 500, error)
@@ -443,6 +534,342 @@ export function createDashboardRouter(options: DashboardRouterOptions): Router {
         },
         snippet,
       })
+    }),
+  )
+
+  router.get(
+    '/chatbots/:id/logo',
+    asyncHandler(async (request, response) => {
+      const chatbotId = toSingleParam(request.params.id)
+      if (!chatbotId) {
+        throw new AppError('Chatbot id is required', 400)
+      }
+
+      const authRequest = asAuthenticatedRequest(request)
+      const chatbot = await loadChatbotById(options.supabaseAdminClient, chatbotId)
+      const isOwner = chatbot?.user_id === authRequest.user.userId
+      const canManageChatbot = authRequest.user.role === 'admin' || isOwner
+      if (!chatbot || !canManageChatbot) {
+        throw new AppError('Chatbot not found', 404)
+      }
+
+      const logoUrl = await createSignedStorageUrl({
+        supabaseAdminClient: options.supabaseAdminClient,
+        bucket: LOGO_BUCKET,
+        storagePath: chatbot.logo_path,
+        expiresInSeconds: 3600,
+      })
+
+      response.json({
+        ok: true,
+        logoUrl,
+      })
+    }),
+  )
+
+  router.post(
+    '/chatbots/:id/logo',
+    uploadParser.single('file'),
+    asyncHandler(async (request, response) => {
+      const chatbotId = toSingleParam(request.params.id)
+      if (!chatbotId) {
+        throw new AppError('Chatbot id is required', 400)
+      }
+
+      const authRequest = asAuthenticatedRequest(request)
+      const chatbot = await loadChatbotById(options.supabaseAdminClient, chatbotId)
+      const isOwner = chatbot?.user_id === authRequest.user.userId
+      const canManageChatbot = authRequest.user.role === 'admin' || isOwner
+      if (!chatbot || !canManageChatbot) {
+        throw new AppError('Chatbot not found', 404)
+      }
+
+      if (authRequest.user.role !== 'admin') {
+        const planContext = await getUserPlanContext(
+          options.supabaseAdminClient,
+          authRequest.user.userId,
+          authRequest.user.role,
+        )
+        assertStarterPlusUploadAccess({
+          role: authRequest.user.role,
+          planCode: planContext.planCode,
+        })
+      }
+
+      const parsedFile = parseUploadedFile(authRequest)
+
+      if (!ALLOWED_LOGO_MIME_TYPES.has(parsedFile.mimetype)) {
+        throw new AppError('Invalid logo file type. Use PNG, JPG, WEBP, or SVG.', 400)
+      }
+
+      if (parsedFile.size > MAX_LOGO_SIZE_BYTES) {
+        throw new AppError('Logo file too large. Max allowed size is 2MB.', 400)
+      }
+
+      if (chatbot.logo_path) {
+        await removeObjectFromStorage({
+          supabaseAdminClient: options.supabaseAdminClient,
+          bucket: LOGO_BUCKET,
+          storagePath: chatbot.logo_path,
+        })
+      }
+
+      const storagePath = buildLogoStoragePath({
+        userId: chatbot.user_id,
+        chatbotId: chatbot.id,
+        originalName: parsedFile.originalname,
+      })
+
+      await uploadBufferToStorage({
+        supabaseAdminClient: options.supabaseAdminClient,
+        bucket: LOGO_BUCKET,
+        storagePath,
+        fileBuffer: parsedFile.buffer,
+        contentType: parsedFile.mimetype,
+      })
+
+      const { data: updatedChatbot, error: updateError } = await options.supabaseAdminClient
+        .from('chatbots')
+        .update({
+          logo_path: storagePath,
+          logo_updated_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', chatbot.id)
+        .select(
+          'id, user_id, client_id, name, website_url, allowed_domains, widget_public_key, logo_path, logo_updated_at, is_active, branding, created_at, updated_at',
+        )
+        .single()
+
+      if (updateError || !updatedChatbot) {
+        throw new AppError('Failed to save chatbot logo', 500, updateError)
+      }
+
+      const logoUrl = await createSignedStorageUrl({
+        supabaseAdminClient: options.supabaseAdminClient,
+        bucket: LOGO_BUCKET,
+        storagePath: updatedChatbot.logo_path,
+        expiresInSeconds: 3600,
+      })
+
+      response.status(201).json({
+        ok: true,
+        logoUrl,
+      })
+    }),
+  )
+
+  router.delete(
+    '/chatbots/:id/logo',
+    asyncHandler(async (request, response) => {
+      const chatbotId = toSingleParam(request.params.id)
+      if (!chatbotId) {
+        throw new AppError('Chatbot id is required', 400)
+      }
+
+      const authRequest = asAuthenticatedRequest(request)
+      const chatbot = await loadChatbotById(options.supabaseAdminClient, chatbotId)
+      const isOwner = chatbot?.user_id === authRequest.user.userId
+      const canManageChatbot = authRequest.user.role === 'admin' || isOwner
+      if (!chatbot || !canManageChatbot) {
+        throw new AppError('Chatbot not found', 404)
+      }
+
+      if (authRequest.user.role !== 'admin') {
+        const planContext = await getUserPlanContext(
+          options.supabaseAdminClient,
+          authRequest.user.userId,
+          authRequest.user.role,
+        )
+        assertStarterPlusUploadAccess({
+          role: authRequest.user.role,
+          planCode: planContext.planCode,
+        })
+      }
+
+      if (chatbot.logo_path) {
+        await removeObjectFromStorage({
+          supabaseAdminClient: options.supabaseAdminClient,
+          bucket: LOGO_BUCKET,
+          storagePath: chatbot.logo_path,
+        })
+      }
+
+      const { error: updateError } = await options.supabaseAdminClient
+        .from('chatbots')
+        .update({
+          logo_path: null,
+          logo_updated_at: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', chatbot.id)
+
+      if (updateError) {
+        throw new AppError('Failed to remove chatbot logo', 500, updateError)
+      }
+
+      response.json({ ok: true })
+    }),
+  )
+
+  router.get(
+    '/chatbots/:id/kb-files',
+    asyncHandler(async (request, response) => {
+      const chatbotId = toSingleParam(request.params.id)
+      if (!chatbotId) {
+        throw new AppError('Chatbot id is required', 400)
+      }
+
+      const authRequest = asAuthenticatedRequest(request)
+      const chatbot = await loadChatbotById(options.supabaseAdminClient, chatbotId)
+      const isOwner = chatbot?.user_id === authRequest.user.userId
+      const canManageChatbot = authRequest.user.role === 'admin' || isOwner
+      if (!chatbot || !canManageChatbot) {
+        throw new AppError('Chatbot not found', 404)
+      }
+
+      const { data, error } = await options.supabaseAdminClient
+        .from('kb_files')
+        .select('id, chatbot_id, user_id, filename, mime_type, storage_path, file_size, created_at')
+        .eq('chatbot_id', chatbot.id)
+        .order('created_at', { ascending: false })
+        .returns<KbFileRow[]>()
+
+      if (error) {
+        throw new AppError('Failed to load knowledge files', 500, error)
+      }
+
+      response.json({
+        ok: true,
+        files: data ?? [],
+      })
+    }),
+  )
+
+  router.post(
+    '/chatbots/:id/kb-files',
+    uploadParser.single('file'),
+    asyncHandler(async (request, response) => {
+      const chatbotId = toSingleParam(request.params.id)
+      if (!chatbotId) {
+        throw new AppError('Chatbot id is required', 400)
+      }
+
+      const authRequest = asAuthenticatedRequest(request)
+      const chatbot = await loadChatbotById(options.supabaseAdminClient, chatbotId)
+      const isOwner = chatbot?.user_id === authRequest.user.userId
+      const canManageChatbot = authRequest.user.role === 'admin' || isOwner
+      if (!chatbot || !canManageChatbot) {
+        throw new AppError('Chatbot not found', 404)
+      }
+
+      if (authRequest.user.role !== 'admin') {
+        const planContext = await getUserPlanContext(
+          options.supabaseAdminClient,
+          authRequest.user.userId,
+          authRequest.user.role,
+        )
+        assertStarterPlusUploadAccess({
+          role: authRequest.user.role,
+          planCode: planContext.planCode,
+        })
+      }
+
+      const parsedFile = parseUploadedFile(authRequest)
+
+      if (!ALLOWED_KB_MIME_TYPES.has(parsedFile.mimetype)) {
+        throw new AppError('Invalid file type. Only PDF, DOC, and DOCX are allowed.', 400)
+      }
+
+      if (parsedFile.size > MAX_KB_FILE_SIZE_BYTES) {
+        throw new AppError('File too large. Max allowed size is 10MB.', 400)
+      }
+
+      const storagePath = buildKbStoragePath({
+        userId: chatbot.user_id,
+        chatbotId: chatbot.id,
+        originalName: parsedFile.originalname,
+      })
+
+      await uploadBufferToStorage({
+        supabaseAdminClient: options.supabaseAdminClient,
+        bucket: KB_DOCS_BUCKET,
+        storagePath,
+        fileBuffer: parsedFile.buffer,
+        contentType: parsedFile.mimetype,
+      })
+
+      const { data: insertedFile, error: insertError } = await options.supabaseAdminClient
+        .from('kb_files')
+        .insert({
+          chatbot_id: chatbot.id,
+          user_id: chatbot.user_id,
+          filename: parsedFile.originalname,
+          mime_type: parsedFile.mimetype,
+          storage_path: storagePath,
+          file_size: parsedFile.size,
+        })
+        .select('id, chatbot_id, user_id, filename, mime_type, storage_path, file_size, created_at')
+        .single<KbFileRow>()
+
+      if (insertError || !insertedFile) {
+        throw new AppError('Failed to save knowledge file metadata', 500, insertError)
+      }
+
+      response.status(201).json({
+        ok: true,
+        file: {
+          id: insertedFile.id,
+          filename: insertedFile.filename,
+          mime_type: insertedFile.mime_type,
+          file_size: insertedFile.file_size,
+          created_at: insertedFile.created_at,
+        },
+      })
+    }),
+  )
+
+  router.delete(
+    '/kb-files/:fileId',
+    asyncHandler(async (request, response) => {
+      const fileId = toSingleParam(request.params.fileId)
+      if (!fileId) {
+        throw new AppError('File id is required', 400)
+      }
+
+      const authRequest = asAuthenticatedRequest(request)
+      const { data: kbFile, error: kbFileError } = await options.supabaseAdminClient
+        .from('kb_files')
+        .select('id, chatbot_id, user_id, filename, mime_type, storage_path, file_size, created_at')
+        .eq('id', fileId)
+        .maybeSingle<KbFileRow>()
+
+      if (kbFileError) {
+        throw new AppError('Failed to load knowledge file', 500, kbFileError)
+      }
+
+      if (!kbFile) {
+        throw new AppError('Knowledge file not found', 404)
+      }
+
+      const isOwner = kbFile.user_id === authRequest.user.userId
+      const canDelete = authRequest.user.role === 'admin' || isOwner
+      if (!canDelete) {
+        throw new AppError('Knowledge file not found', 404)
+      }
+
+      await removeObjectFromStorage({
+        supabaseAdminClient: options.supabaseAdminClient,
+        bucket: KB_DOCS_BUCKET,
+        storagePath: kbFile.storage_path,
+      })
+
+      const { error: deleteError } = await options.supabaseAdminClient.from('kb_files').delete().eq('id', kbFile.id)
+      if (deleteError) {
+        throw new AppError('Failed to delete knowledge file metadata', 500, deleteError)
+      }
+
+      response.json({ ok: true })
     }),
   )
 
@@ -806,5 +1233,6 @@ export function createDashboardRouter(options: DashboardRouterOptions): Router {
 
   return router
 }
+
 
 

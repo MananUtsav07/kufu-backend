@@ -4,6 +4,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { asyncHandler, AppError } from '../lib/errors.js'
 import { respondValidationError } from '../lib/http.js'
 import { widgetConfigQuerySchema } from '../schemas/api.js'
+import { createSignedStorageUrl, LOGO_BUCKET } from '../services/storageService.js'
 import { loadChatbotByPublicKey, loadClientById } from '../services/tenantService.js'
 
 type WidgetRouterOptions = {
@@ -58,6 +59,13 @@ export function createWidgetApiRouter(options: WidgetRouterOptions): Router {
         ? await loadClientById(options.supabaseAdminClient, chatbot.client_id)
         : null
 
+      const logoUrl = await createSignedStorageUrl({
+        supabaseAdminClient: options.supabaseAdminClient,
+        bucket: LOGO_BUCKET,
+        storagePath: chatbot.logo_path,
+        expiresInSeconds: 3600,
+      })
+
       response.json({
         ok: true,
         config: {
@@ -68,6 +76,7 @@ export function createWidgetApiRouter(options: WidgetRouterOptions): Router {
           business_name: client?.business_name ?? 'Kufu',
           theme: 'dark',
           greeting: `Hi, welcome to ${client?.business_name ?? 'Kufu'}. How can we help you today?`,
+          logo_url: logoUrl,
           allowed_domains: getSafeDomainList(chatbot),
         },
       })

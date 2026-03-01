@@ -29,3 +29,9 @@ export const adminSetPlanSchema = z
     plan_code: z.enum(['free', 'starter', 'pro', 'business']),
   })
   .strict()
+
+export const adminUserPlanUpdateSchema = z
+  .object({
+    planCode: z.enum(['free', 'starter', 'pro', 'business']),
+  })
+  .strict()
