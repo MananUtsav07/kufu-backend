@@ -131,6 +131,16 @@ async function fetchHtmlWithAxios(
   };
 }
 
+async function fetchWithJina(url: string): Promise<string> {
+  const response = await axios.get(`https://r.jina.ai/${url}`, {
+    timeout: 30_000,
+    headers: {
+      Accept: "text/plain",
+    },
+  });
+  return typeof response.data === "string" ? response.data : "";
+}
+
 function logPageEvent(args: {
   url: string;
   status: number;
@@ -393,112 +403,16 @@ export async function discoverWebsiteUrls(
 export async function fetchAndExtractPage(
   options: FetchPageOptions,
 ): Promise<CrawledPage> {
-  let response: HttpPageResponse;
   try {
-    response = await fetchHtmlWithAxios(
-      options.url,
-      options.fetchTimeoutMs ?? 12_000,
-    );
+    const contentText = await fetchWithJina(options.url);
+
+    return {
+      url: options.url,
+      title: null,
+      contentText: contentText || `Source URL: ${options.url}`,
+      httpStatus: 200,
+    };
   } catch (error) {
-    logPageEvent({
-      url: options.url,
-      status: 0,
-      contentType: "",
-      extractedLen: 0,
-      usedFallback: false,
-      skipReason: error instanceof Error ? error.message : "fetch_failed",
-    });
-    throw error;
+    throw new Error(`Failed to fetch: ${options.url}`);
   }
-  console.log("Raw HTML length:", response.html.length);
-  console.log("First 500 chars:", response.html.slice(0, 500));
-
-  if (response.status < 200 || response.status >= 300) {
-    logPageEvent({
-      url: options.url,
-      status: response.status,
-      contentType: response.contentType,
-      extractedLen: 0,
-      usedFallback: false,
-      skipReason: `http_${response.status}`,
-    });
-    throw new Error(`HTTP ${response.status}`);
-  }
-
-  if (!response.contentType.toLowerCase().includes("text/html")) {
-    logPageEvent({
-      url: options.url,
-      status: response.status,
-      contentType: response.contentType,
-      extractedLen: 0,
-      usedFallback: false,
-      skipReason: "unsupported_content_type",
-    });
-    throw new Error(
-      `Unsupported content-type: ${response.contentType || "unknown"}`,
-    );
-  }
-
-  const $ = cheerio.load(response.html);
-  $("script, style, noscript, svg").remove();
-
-  const title = $("title").first().text().trim() || null;
-  const metaDescription =
-    $('meta[name="description"]').attr("content")?.trim() ||
-    $('meta[property="og:description"]').attr("content")?.trim() ||
-    "";
-  const headings = $("h1, h2, h3")
-    .map((_index, element) => $(element).text().trim())
-    .get()
-    .filter(Boolean)
-    .join(" ");
-
-  let contentText = $("body").text().replace(/\s+/g, " ").trim();
-  let usedFallback = false;
-
-  if (contentText.length < thinContentThreshold) {
-    contentText = [contentText, title ?? "", metaDescription, headings]
-      .filter(Boolean)
-      .join("\n")
-      .replace(/\s+/g, " ")
-      .trim();
-    usedFallback = true;
-  }
-
-  if (contentText.length < thinContentThreshold) {
-    const rendered = await renderPageWithPlaywright(options.url);
-    if (rendered && rendered.text.trim().length > contentText.length) {
-      contentText = rendered.text.trim();
-      usedFallback = true;
-    }
-  }
-
-  if (!contentText) {
-    contentText = [title ?? "", metaDescription, headings]
-      .filter(Boolean)
-      .join(" ")
-      .trim();
-    usedFallback = true;
-  }
-
-  if (!contentText) {
-    contentText = `Source URL: ${options.url}`;
-    usedFallback = true;
-  }
-
-  logPageEvent({
-    url: options.url,
-    status: response.status,
-    contentType: response.contentType,
-    extractedLen: contentText.length,
-    usedFallback,
-    skipReason: null,
-  });
-
-  return {
-    url: options.url,
-    title,
-    contentText,
-    httpStatus: response.status,
-  };
 }
