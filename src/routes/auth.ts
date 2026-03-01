@@ -263,21 +263,12 @@ export function createAuthRouter(options: AuthRouterOptions): Router {
       const backendVerifyUrl = `${trimTrailingSlash(options.backendBaseUrl)}/api/auth/verify?token=${encodeURIComponent(verificationToken.token)}`
 
       if (options.mailer) {
-        try {
-          await options.mailer.sendVerificationEmail({
-            to: normalizedEmail,
-            verificationUrl,
-            fallbackVerificationUrl: backendVerifyUrl,
-            expiresInMinutes: verificationToken.expiresInMinutes,
-          })
-        } catch (error) {
-          const message = error instanceof Error ? error.message : 'Unknown SMTP error'
-          throw new AppError(
-            'Unable to send verification email right now. Please retry in a minute.',
-            503,
-            { smtpError: message },
-          )
-        }
+        await options.mailer.sendVerificationEmail({
+          to: normalizedEmail,
+          verificationUrl,
+          fallbackVerificationUrl: backendVerifyUrl,
+          expiresInMinutes: verificationToken.expiresInMinutes,
+        })
       }
 
       await writeAuditLog({

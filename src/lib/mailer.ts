@@ -20,19 +20,12 @@ export function createMailer(options: MailerOptions) {
   }
 
   const transporter = nodemailer.createTransport({
-    host: 'smtp.gmail.com',
-    port: 465,
-    secure: true,
-    requireTLS: true,
-    connectionTimeout: 30_000,
-    greetingTimeout: 30_000,
-    socketTimeout: 45_000,
-    family: 4,
+    service: 'gmail',
     auth: {
       user: emailUser,
       pass: emailPass,
     },
-  } as any)
+  })
 
   return {
     async sendVerificationEmail(payload: VerificationEmailPayload): Promise<void> {
