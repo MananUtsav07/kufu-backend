@@ -186,7 +186,13 @@ async function getPlaywrightBrowser(): Promise<Browser | null> {
       try {
         const playwright = await import("playwright");
         const browser = await playwright.chromium.launch({
-          args: ["--no-sandbox", "--disable-setuid-sandbox"],
+          args: [
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-dev-shm-usage", // ADD THIS
+            "--disable-gpu", // ADD THIS
+            "--single-process", // ADD THIS
+          ],
           headless: true,
         });
         console.log("[playwright] browser launched successfully");
