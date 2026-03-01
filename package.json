@@ -11,6 +11,7 @@
     "postinstall": "npx playwright install chromium"
   },
   "dependencies": {
+    "@getbrevo/brevo": "^4.0.1",
     "@sparticuz/chromium": "^143.0.4",
     "@supabase/supabase-js": "^2.97.0",
     "axios": "^1.11.0",

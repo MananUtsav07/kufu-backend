@@ -1,7 +1,7 @@
-import { Resend } from 'resend'
+import axios from 'axios'
 
 type MailerOptions = {
-  resendApiKey: string
+  brevoApiKey: string
   emailFrom: string
 }
 
@@ -13,13 +13,11 @@ type VerificationEmailPayload = {
 }
 
 export function createMailer(options: MailerOptions) {
-  const { resendApiKey, emailFrom } = options
+  const { brevoApiKey, emailFrom } = options
 
-  if (!resendApiKey) {
+  if (!brevoApiKey) {
     return null
   }
-
-  const resend = new Resend(resendApiKey)
 
   return {
     async sendVerificationEmail(payload: VerificationEmailPayload): Promise<void> {
@@ -45,13 +43,22 @@ export function createMailer(options: MailerOptions) {
         </div>
       `
 
-      await resend.emails.send({
-        from: emailFrom,
-        to,
-        subject: 'Verify your Kufu account',
-        text: `Verify your account: ${verificationUrl}\n\nBackup link: ${fallbackVerificationUrl}\n\nLink expires in ${expiresInMinutes} minutes.`,
-        html,
-      })
+      await axios.post(
+        'https://api.brevo.com/v3/smtp/email',
+        {
+          sender: { name: 'Kufu', email: emailFrom },
+          to: [{ email: to }],
+          subject: 'Verify your Kufu account',
+          htmlContent: html,
+          textContent: `Verify your account: ${verificationUrl}\n\nBackup link: ${fallbackVerificationUrl}\n\nLink expires in ${expiresInMinutes} minutes.`,
+        },
+        {
+          headers: {
+            'api-key': brevoApiKey,
+            'Content-Type': 'application/json',
+          },
+        },
+      )
     },
   }
 }

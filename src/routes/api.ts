@@ -24,8 +24,8 @@ type ApiRouterOptions = {
   openAiClient: OpenAI | null;
   supabaseAdminClient: SupabaseClient | null;
   jwtSecret: string;
-  resendApiKey: string;
-  emailFrom: string 
+  brevoApiKey: string
+emailFrom: string
   dataStore: DataStore;
   allowDevBypassEmailVerify: boolean;
 };
@@ -52,8 +52,8 @@ export function createApiRouter(options: ApiRouterOptions): Router {
     return router;
   }
 
-  const mailer = createMailer({
-  resendApiKey: options.resendApiKey,
+ const mailer = createMailer({
+  brevoApiKey: options.brevoApiKey,
   emailFrom: options.emailFrom,
 })
 
