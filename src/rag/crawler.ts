@@ -61,7 +61,6 @@ const playwrightEnabled = process.env.ENABLE_PLAYWRIGHT === "true";
 const jsRenderTimeoutMs = Number(
   process.env.RAG_JS_RENDER_TIMEOUT_MS ?? 15_000,
 );
-const thinContentThreshold = 300;
 
 let browserPromise: Promise<Browser | null> | null = null;
 
@@ -139,19 +138,6 @@ async function fetchWithJina(url: string): Promise<string> {
     },
   });
   return typeof response.data === "string" ? response.data : "";
-}
-
-function logPageEvent(args: {
-  url: string;
-  status: number;
-  contentType: string;
-  extractedLen: number;
-  usedFallback: boolean;
-  skipReason: string | null;
-}) {
-  console.info(
-    `[rag] page url=${args.url} status=${args.status} content-type="${args.contentType || "unknown"}" extractedLen=${args.extractedLen} usedFallback=${args.usedFallback} skipReason=${args.skipReason ?? "none"}`,
-  );
 }
 
 async function fetchSitemapUrls(
@@ -400,19 +386,20 @@ export async function discoverWebsiteUrls(
   return Array.from(dedup).slice(0, maxPages);
 }
 
-export async function fetchAndExtractPage(
-  options: FetchPageOptions,
-): Promise<CrawledPage> {
+export async function fetchAndExtractPage(options: FetchPageOptions): Promise<CrawledPage> {
   try {
-    const contentText = await fetchWithJina(options.url);
-
+    console.info(`[rag] fetching url=${options.url}`)
+    const contentText = await fetchWithJina(options.url)
+    console.info(`[rag] fetched url=${options.url} extractedLen=${contentText.length}`)
+    
     return {
       url: options.url,
       title: null,
       contentText: contentText || `Source URL: ${options.url}`,
       httpStatus: 200,
-    };
+    }
   } catch (error) {
-    throw new Error(`Failed to fetch: ${options.url}`);
+    console.error(`[rag] failed url=${options.url} error=${error instanceof Error ? error.message : 'unknown'}`)
+    throw new Error(`Failed to fetch: ${options.url}`)
   }
 }
