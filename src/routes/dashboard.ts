@@ -49,6 +49,7 @@ import {
   isStarterPlusPlan,
   ensureSubscription,
   enforcePlanMessageLimit,
+  incrementSubscriptionUsage,
   getUserPlanContext,
   loadPlanByCode,
   resolveChatbotLimitForPlan,
@@ -1559,6 +1560,18 @@ export function createDashboardRouter(options: DashboardRouterOptions): Router {
         userId: authRequest.user.userId,
         role: authRequest.user.role,
       });
+      const usageCheck =
+        authRequest.user.role === "admin"
+          ? null
+          : await enforcePlanMessageLimit(
+              options.supabaseAdminClient,
+              authRequest.user.userId,
+              authRequest.user.role,
+            );
+
+      if (usageCheck && !usageCheck.allowed) {
+        throw new AppError(usageCheck.reason || "Plan usage limit reached", 403);
+      }
 
       const sanitizedMessages = sanitizeMessages(parsedBody.data.messages, 12);
       if (sanitizedMessages.length === 0) {
@@ -1638,11 +1651,20 @@ export function createDashboardRouter(options: DashboardRouterOptions): Router {
       const reply =
         completion.choices?.[0]?.message?.content?.trim() ||
         "Sorry - I couldn't generate a response.";
+      const updatedSubscription =
+        usageCheck?.subscription && authRequest.user.role !== "admin"
+          ? await incrementSubscriptionUsage(
+              options.supabaseAdminClient,
+              usageCheck.subscription,
+              1,
+            )
+          : usageCheck?.subscription ?? null;
 
       response.json({
         ok: true,
         reply,
         chatbotId: chatbot.id,
+        usage: updatedSubscription,
       });
     }),
   );

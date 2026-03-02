@@ -125,6 +125,12 @@ export function createWidgetScriptRouter(options: WidgetRouterOptions): Router {
       const backendBase = trimTrailingSlash(options.backendBaseUrl)
       const key = encodeURIComponent(parsed.data.key)
       const iframeSource = `${frontendBase}/widget?key=${key}`
+      const bubbleLogoUrl = await createSignedStorageUrl({
+        supabaseAdminClient: options.supabaseAdminClient,
+        bucket: LOGO_BUCKET,
+        storagePath: chatbot.logo_path,
+        expiresInSeconds: 3600,
+      })
 
       const script = `(function(){
   if (window.__kufuWidgetLoaded) return;
@@ -157,16 +163,34 @@ export function createWidgetScriptRouter(options: WidgetRouterOptions): Router {
   bubble.style.border = '0';
   bubble.style.borderRadius = '9999px';
   bubble.style.background = 'linear-gradient(135deg,#4f46e5,#6366f1)';
+  bubble.style.display = 'flex';
+  bubble.style.alignItems = 'center';
+  bubble.style.justifyContent = 'center';
+  bubble.style.padding = '0';
+  bubble.style.overflow = 'hidden';
   bubble.style.color = '#fff';
   bubble.style.fontSize = '20px';
   bubble.style.cursor = 'pointer';
   bubble.style.boxShadow = '0 16px 32px rgba(79,70,229,.4)';
-  bubble.textContent = 'AI';
+  var bubbleLogoUrl = ${JSON.stringify(bubbleLogoUrl)};
+  if (bubbleLogoUrl) {
+    bubble.style.background = '#0f172a';
+    var logoImg = document.createElement('img');
+    logoImg.src = bubbleLogoUrl;
+    logoImg.alt = 'Chat logo';
+    logoImg.style.width = '72%';
+    logoImg.style.height = '72%';
+    logoImg.style.objectFit = 'contain';
+    logoImg.style.pointerEvents = 'none';
+    bubble.appendChild(logoImg);
+  } else {
+    bubble.textContent = 'AI';
+  }
 
   var open = false;
   function sync(){
     iframe.style.display = open ? 'block' : 'none';
-    bubble.style.display = open ? 'none' : 'block';
+    bubble.style.display = open ? 'none' : 'flex';
   }
 
   bubble.addEventListener('click', function(){

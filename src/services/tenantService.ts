@@ -276,7 +276,7 @@ export async function ensureDefaultChatbot(
     .insert({
       user_id: args.userId,
       client_id: args.clientId,
-      name: `${args.businessName} Primary Bot`,
+      name: args.businessName,
       website_url: args.websiteUrl,
       allowed_domains: allowedDomains,
       widget_public_key: key,
