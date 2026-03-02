@@ -1,14 +1,17 @@
-import { Router } from 'express'
-import type { SupabaseClient } from '@supabase/supabase-js'
-import type OpenAI from 'openai'
-import multer from 'multer'
+import { Router } from "express";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import type OpenAI from "openai";
+import multer from "multer";
 
-import { authMiddleware, type AuthenticatedRequest } from '../lib/auth-middleware.js'
-import { asyncHandler, AppError } from '../lib/errors.js'
-import { respondValidationError } from '../lib/http.js'
-import { sanitizeMessages } from '../lib/sanitizeMessages.js'
-import { buildSystemPrompt } from '../lib/systemPrompt.js'
-import { retrieveRelevantChunks } from '../rag/retrieval.js'
+import {
+  authMiddleware,
+  type AuthenticatedRequest,
+} from "../lib/auth-middleware.js";
+import { asyncHandler, AppError } from "../lib/errors.js";
+import { respondValidationError } from "../lib/http.js";
+import { sanitizeMessages } from "../lib/sanitizeMessages.js";
+import { buildSystemPrompt } from "../lib/systemPrompt.js";
+import { retrieveRelevantChunks } from "../rag/retrieval.js";
 import {
   dashboardAnalyticsQuerySchema,
   dashboardChatbotCreateSchema,
@@ -24,10 +27,13 @@ import {
   dashboardTestChatSchema,
   dashboardTicketCreateSchema,
   dashboardTicketUpdateSchema,
-} from '../schemas/dashboard.js'
-import { writeAuditLog } from '../services/auditService.js'
-import { computeChatAnalytics } from '../services/analyticsService.js'
-import { listChatHistory, searchChatHistory } from '../services/chatHistoryService.js'
+} from "../schemas/dashboard.js";
+import { writeAuditLog } from "../services/auditService.js";
+import { computeChatAnalytics } from "../services/analyticsService.js";
+import {
+  listChatHistory,
+  searchChatHistory,
+} from "../services/chatHistoryService.js";
 import {
   ensureClientForUser,
   ensureDefaultChatbot,
@@ -38,7 +44,7 @@ import {
   loadUserChatbots,
   buildAllowedDomains,
   createWidgetPublicKey,
-} from '../services/tenantService.js'
+} from "../services/tenantService.js";
 import {
   isStarterPlusPlan,
   ensureSubscription,
@@ -46,8 +52,8 @@ import {
   getUserPlanContext,
   loadPlanByCode,
   resolveChatbotLimitForPlan,
-} from '../services/subscriptionService.js'
-import { loadClientKnowledgeText } from '../services/chatService.js'
+} from "../services/subscriptionService.js";
+import { loadClientKnowledgeText } from "../services/chatService.js";
 import {
   buildKbStoragePath,
   buildLogoStoragePath,
@@ -56,214 +62,247 @@ import {
   LOGO_BUCKET,
   removeObjectFromStorage,
   uploadBufferToStorage,
-} from '../services/storageService.js'
-
+} from "../services/storageService.js";
 
 type DashboardRouterOptions = {
-  jwtSecret: string
-  supabaseAdminClient: SupabaseClient
-  backendBaseUrl: string
-  openAiApiKey: string
-  openAiModel: string
-  openAiClient: OpenAI | null
-}
+  jwtSecret: string;
+  supabaseAdminClient: SupabaseClient;
+  backendBaseUrl: string;
+  openAiApiKey: string;
+  openAiModel: string;
+  openAiClient: OpenAI | null;
+};
 
 type LeadRow = {
-  id: string
-  client_id: string
-  name: string | null
-  email: string | null
-  phone: string | null
-  need: string | null
-  status: string
-  source: string | null
-  created_at: string
-}
+  id: string;
+  client_id: string;
+  name: string | null;
+  email: string | null;
+  phone: string | null;
+  need: string | null;
+  status: string;
+  source: string | null;
+  created_at: string;
+};
 
 type ClientKnowledgeRow = {
-  id: string
-  client_id: string
-  services_text: string | null
-  pricing_text: string | null
-  faqs_json: unknown[]
-  hours_text: string | null
-  contact_text: string | null
-  updated_at: string
-}
+  id: string;
+  client_id: string;
+  services_text: string | null;
+  pricing_text: string | null;
+  faqs_json: unknown[];
+  hours_text: string | null;
+  contact_text: string | null;
+  updated_at: string;
+};
 
 type KbFileRow = {
-  id: string
-  chatbot_id: string
-  user_id: string
-  filename: string
-  mime_type: string
-  storage_path: string
-  file_size: number
-  created_at: string
-}
+  id: string;
+  chatbot_id: string;
+  user_id: string;
+  filename: string;
+  mime_type: string;
+  storage_path: string;
+  file_size: number;
+  created_at: string;
+};
 
-const BYTES_IN_MB = 1024 * 1024
-const MAX_LOGO_SIZE_BYTES = 2 * BYTES_IN_MB
-const MAX_KB_FILE_SIZE_BYTES = 10 * BYTES_IN_MB
+const BYTES_IN_MB = 1024 * 1024;
+const MAX_LOGO_SIZE_BYTES = 2 * BYTES_IN_MB;
+const MAX_KB_FILE_SIZE_BYTES = 10 * BYTES_IN_MB;
 
 const ALLOWED_LOGO_MIME_TYPES = new Set([
-  'image/png',
-  'image/jpeg',
-  'image/webp',
-  'image/svg+xml',
-])
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "image/svg+xml",
+]);
 
 const ALLOWED_KB_MIME_TYPES = new Set([
-  'application/pdf',
-  'application/msword',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-])
+  "application/pdf",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+]);
 
 function asAuthenticatedRequest(request: unknown): AuthenticatedRequest {
-  return request as AuthenticatedRequest
+  return request as AuthenticatedRequest;
 }
 
 function toSingleParam(value: string | string[] | undefined): string | null {
-  if (typeof value === 'string' && value.trim().length > 0) {
-    return value
+  if (typeof value === "string" && value.trim().length > 0) {
+    return value;
   }
 
-  if (Array.isArray(value) && typeof value[0] === 'string' && value[0].trim().length > 0) {
-    return value[0]
+  if (
+    Array.isArray(value) &&
+    typeof value[0] === "string" &&
+    value[0].trim().length > 0
+  ) {
+    return value[0];
   }
 
-  return null
+  return null;
 }
 
 function trimTrailingSlash(value: string): string {
-  return value.replace(/\/+$/, '')
+  return value.replace(/\/+$/, "");
 }
 
 function parseUploadedFile(request: AuthenticatedRequest): Express.Multer.File {
-  const file = request.file
+  const file = request.file;
   if (!file) {
-    throw new AppError('File is required. Use multipart/form-data field "file".', 400)
+    throw new AppError(
+      'File is required. Use multipart/form-data field "file".',
+      400,
+    );
   }
 
-  return file
+  return file;
 }
 
 function assertStarterPlusUploadAccess(params: {
-  role: AuthenticatedRequest['user']['role']
-  planCode: string
+  role: AuthenticatedRequest["user"]["role"];
+  planCode: string;
 }) {
-  if (params.role === 'admin') {
-    return
+  if (params.role === "admin") {
+    return;
   }
 
-  const starterPlusPlans = new Set(['starter', 'pro', 'business'])
+  const starterPlusPlans = new Set(["starter", "pro", "business"]);
   if (!starterPlusPlans.has(params.planCode)) {
-    throw new AppError('Upgrade required', 403)
+    throw new AppError("Upgrade required", 403);
   }
 }
 
-function toBooleanLeadFilter(value: 'yes' | 'no' | undefined): boolean | undefined {
-  if (value === 'yes') {
-    return true
+function toBooleanLeadFilter(
+  value: "yes" | "no" | undefined,
+): boolean | undefined {
+  if (value === "yes") {
+    return true;
   }
-  if (value === 'no') {
-    return false
+  if (value === "no") {
+    return false;
   }
-  return undefined
+  return undefined;
 }
 
 function assertProOrBusinessAccess(params: {
-  role: AuthenticatedRequest['user']['role']
-  planCode: string
+  role: AuthenticatedRequest["user"]["role"];
+  planCode: string;
 }) {
-  if (params.role === 'admin') {
-    return
+  if (params.role === "admin") {
+    return;
   }
 
-  if (params.planCode !== 'pro' && params.planCode !== 'business') {
-    throw new AppError('Access Denied', 403)
+  if (params.planCode !== "pro" && params.planCode !== "business") {
+    throw new AppError("Access Denied", 403);
   }
 }
 
 async function loadAuthorizedChatbot(args: {
-  supabaseAdminClient: SupabaseClient
-  chatbotId: string
-  userId: string
-  role: AuthenticatedRequest['user']['role']
+  supabaseAdminClient: SupabaseClient;
+  chatbotId: string;
+  userId: string;
+  role: AuthenticatedRequest["user"]["role"];
 }) {
-  const chatbot = await loadChatbotById(args.supabaseAdminClient, args.chatbotId)
-  const isOwner = chatbot?.user_id === args.userId
-  const canAccess = args.role === 'admin' || isOwner
+  const chatbot = await loadChatbotById(
+    args.supabaseAdminClient,
+    args.chatbotId,
+  );
+  const isOwner = chatbot?.user_id === args.userId;
+  const canAccess = args.role === "admin" || isOwner;
 
   if (!chatbot || !canAccess) {
-    throw new AppError('Chatbot not found', 404)
+    throw new AppError("Chatbot not found", 404);
   }
 
-  return chatbot
+  return chatbot;
 }
 
 export function createDashboardRouter(options: DashboardRouterOptions): Router {
-  const router = Router()
-  const uploadParser = multer({ storage: multer.memoryStorage() })
+  const router = Router();
+  const uploadParser = multer({ storage: multer.memoryStorage() });
 
-  router.use(authMiddleware(options.jwtSecret))
+  router.use(authMiddleware(options.jwtSecret));
 
   router.get(
-    '/summary',
+    "/summary",
     asyncHandler(async (request, response) => {
       const parsedQuery = dashboardSummaryQuerySchema.safeParse({
         limit_sessions: request.query.limit_sessions,
-      })
+      });
       if (!parsedQuery.success) {
-        return respondValidationError(parsedQuery.error, response)
+        return respondValidationError(parsedQuery.error, response);
       }
 
-      const authRequest = asAuthenticatedRequest(request)
-      const user = await loadUserById(options.supabaseAdminClient, authRequest.user.userId)
+      const authRequest = asAuthenticatedRequest(request);
+      const user = await loadUserById(
+        options.supabaseAdminClient,
+        authRequest.user.userId,
+      );
       if (!user) {
-        throw new AppError('Unauthorized', 401)
+        throw new AppError("Unauthorized", 401);
       }
 
       const client = await ensureTenantOwnership(
         options.supabaseAdminClient,
         authRequest.user.userId,
         authRequest.user.clientId,
-      )
+      );
 
-      const subscription = await ensureSubscription(options.supabaseAdminClient, user.id)
-      const plan = await loadPlanByCode(options.supabaseAdminClient, subscription.plan_code)
-      const integrations = await loadUserChatbots(options.supabaseAdminClient, user.id)
+      const subscription = await ensureSubscription(
+        options.supabaseAdminClient,
+        user.id,
+      );
+      const plan = await loadPlanByCode(
+        options.supabaseAdminClient,
+        subscription.plan_code,
+      );
+      const integrations = await loadUserChatbots(
+        options.supabaseAdminClient,
+        user.id,
+      );
 
-      const [{ count: ticketCount, error: ticketError }, { data: recentMessages, error: messagesError }] =
-        await Promise.all([
-          options.supabaseAdminClient
-            .from('tickets')
-            .select('id', { count: 'exact', head: true })
-            .eq('user_id', user.id)
-            .eq('status', 'open'),
-          options.supabaseAdminClient
-            .from('chatbot_messages')
-            .select('id, user_id, chatbot_id, session_id, role, content, tokens_estimate, created_at')
-            .eq('user_id', user.id)
-            .order('created_at', { ascending: false })
-            .limit(parsedQuery.data.limit_sessions),
-        ])
+      const [
+        { count: ticketCount, error: ticketError },
+        { data: recentMessages, error: messagesError },
+      ] = await Promise.all([
+        options.supabaseAdminClient
+          .from("tickets")
+          .select("id", { count: "exact", head: true })
+          .eq("user_id", user.id)
+          .eq("status", "open"),
+        options.supabaseAdminClient
+          .from("chatbot_messages")
+          .select(
+            "id, user_id, chatbot_id, session_id, role, content, tokens_estimate, created_at",
+          )
+          .eq("user_id", user.id)
+          .order("created_at", { ascending: false })
+          .limit(parsedQuery.data.limit_sessions),
+      ]);
 
       if (ticketError || messagesError) {
-        throw new AppError('Failed to load dashboard summary', 500, ticketError ?? messagesError)
+        throw new AppError(
+          "Failed to load dashboard summary",
+          500,
+          ticketError ?? messagesError,
+        );
       }
 
-      const groupedSessions = new Map<string, Array<Record<string, unknown>>>()
+      const groupedSessions = new Map<string, Array<Record<string, unknown>>>();
       for (const message of recentMessages ?? []) {
-        const current = groupedSessions.get(message.session_id) ?? []
-        current.push(message as unknown as Record<string, unknown>)
-        groupedSessions.set(message.session_id, current)
+        const current = groupedSessions.get(message.session_id) ?? [];
+        current.push(message as unknown as Record<string, unknown>);
+        groupedSessions.set(message.session_id, current);
       }
 
-      const recentSessions = Array.from(groupedSessions.entries()).map(([sessionId, items]) => ({
-        session_id: sessionId,
-        messages: items,
-      }))
+      const recentSessions = Array.from(groupedSessions.entries()).map(
+        ([sessionId, items]) => ({
+          session_id: sessionId,
+          messages: items,
+        }),
+      );
 
       return response.json({
         ok: true,
@@ -284,21 +323,31 @@ export function createDashboardRouter(options: DashboardRouterOptions): Router {
         client,
         plan,
         subscription,
-      })
+      });
     }),
-  )
+  );
 
   router.get(
-    '/metrics',
+    "/metrics",
     asyncHandler(async (request, response) => {
-      const authRequest = asAuthenticatedRequest(request)
-      const user = await loadUserById(options.supabaseAdminClient, authRequest.user.userId)
+      const authRequest = asAuthenticatedRequest(request);
+      const user = await loadUserById(
+        options.supabaseAdminClient,
+        authRequest.user.userId,
+      );
       if (!user) {
-        throw new AppError('Unauthorized', 401)
+        throw new AppError("Unauthorized", 401);
       }
 
-      const usageCheck = await enforcePlanMessageLimit(options.supabaseAdminClient, user.id, user.role)
-      const integrations = await loadUserChatbots(options.supabaseAdminClient, user.id)
+      const usageCheck = await enforcePlanMessageLimit(
+        options.supabaseAdminClient,
+        user.id,
+        user.role,
+      );
+      const integrations = await loadUserChatbots(
+        options.supabaseAdminClient,
+        user.id,
+      );
 
       response.json({
         ok: true,
@@ -308,130 +357,163 @@ export function createDashboardRouter(options: DashboardRouterOptions): Router {
           number_of_chats: usageCheck.subscription?.total_message_count ?? 0,
           integrations: integrations.length,
         },
-      })
+      });
     }),
-  )
+  );
 
   router.get(
-    '/plan',
+    "/plan",
     asyncHandler(async (request, response) => {
-      const authRequest = asAuthenticatedRequest(request)
-      const user = await loadUserById(options.supabaseAdminClient, authRequest.user.userId)
+      const authRequest = asAuthenticatedRequest(request);
+      const user = await loadUserById(
+        options.supabaseAdminClient,
+        authRequest.user.userId,
+      );
       if (!user) {
-        throw new AppError('Unauthorized', 401)
+        throw new AppError("Unauthorized", 401);
       }
 
-      const subscription = await ensureSubscription(options.supabaseAdminClient, user.id)
-      const plan = await loadPlanByCode(options.supabaseAdminClient, subscription.plan_code)
+      const subscription = await ensureSubscription(
+        options.supabaseAdminClient,
+        user.id,
+      );
+      const plan = await loadPlanByCode(
+        options.supabaseAdminClient,
+        subscription.plan_code,
+      );
 
       response.json({
         ok: true,
         plan,
         subscription,
-      })
+      });
     }),
-  )
+  );
 
   router.post(
-    '/profile',
+    "/profile",
     asyncHandler(async (request, response) => {
-      const parsed = dashboardProfileSchema.safeParse(request.body)
+      const parsed = dashboardProfileSchema.safeParse(request.body);
       if (!parsed.success) {
-        return respondValidationError(parsed.error, response)
+        return respondValidationError(parsed.error, response);
       }
 
-      const authRequest = asAuthenticatedRequest(request)
+      const authRequest = asAuthenticatedRequest(request);
 
       const client = await ensureTenantOwnership(
         options.supabaseAdminClient,
         authRequest.user.userId,
         authRequest.user.clientId,
-      )
+      );
 
       const { data, error } = await options.supabaseAdminClient
-        .from('clients')
+        .from("clients")
         .update({
           business_name: parsed.data.business_name,
           website_url: parsed.data.website_url?.trim() || null,
         })
-        .eq('id', client.id)
-        .select('id, user_id, business_name, website_url, plan, knowledge_base_text, created_at')
-        .single()
+        .eq("id", client.id)
+        .select(
+          "id, user_id, business_name, website_url, plan, knowledge_base_text, created_at",
+        )
+        .single();
 
       if (error || !data) {
-        throw new AppError('Failed to update profile', 500, error)
+        throw new AppError("Failed to update profile", 500, error);
       }
 
       await writeAuditLog({
         supabaseAdminClient: options.supabaseAdminClient,
         actorUserId: authRequest.user.userId,
-        action: 'dashboard.profile.update',
-      })
+        action: "dashboard.profile.update",
+      });
 
-      response.json({ ok: true, client: data })
+      response.json({ ok: true, client: data });
     }),
-  )
+  );
 
   router.get(
-    '/chatbots',
+    "/chatbots",
     asyncHandler(async (request, response) => {
-      const authRequest = asAuthenticatedRequest(request)
-      const chatbots = await loadUserChatbots(options.supabaseAdminClient, authRequest.user.userId)
+      const authRequest = asAuthenticatedRequest(request);
+      const chatbots = await loadUserChatbots(
+        options.supabaseAdminClient,
+        authRequest.user.userId,
+      );
 
       response.json({
         ok: true,
         chatbots,
-      })
+      });
     }),
-  )
+  );
 
   router.post(
-    '/chatbots',
+    "/chatbots",
     asyncHandler(async (request, response) => {
-      const parsed = dashboardChatbotCreateSchema.safeParse(request.body)
+      const parsed = dashboardChatbotCreateSchema.safeParse(request.body);
       if (!parsed.success) {
-        return respondValidationError(parsed.error, response)
+        return respondValidationError(parsed.error, response);
       }
 
-      const authRequest = asAuthenticatedRequest(request)
-      const user = await loadUserById(options.supabaseAdminClient, authRequest.user.userId)
+      const authRequest = asAuthenticatedRequest(request);
+      const user = await loadUserById(
+        options.supabaseAdminClient,
+        authRequest.user.userId,
+      );
       if (!user) {
-        throw new AppError('Unauthorized', 401)
+        throw new AppError("Unauthorized", 401);
       }
 
       const client = await ensureClientForUser(options.supabaseAdminClient, {
         userId: user.id,
-        businessName: 'Kufu Client',
+        businessName: "Kufu Client",
         websiteUrl: null,
-      })
+      });
 
-      const usageCheck = await enforcePlanMessageLimit(options.supabaseAdminClient, user.id, user.role)
-      const chatbotLimit = resolveChatbotLimitForPlan(usageCheck.plan, user.role)
-      const existingChatbots = await loadUserChatbots(options.supabaseAdminClient, user.id)
+      const usageCheck = await enforcePlanMessageLimit(
+        options.supabaseAdminClient,
+        user.id,
+        user.role,
+      );
+      const chatbotLimit = resolveChatbotLimitForPlan(
+        usageCheck.plan,
+        user.role,
+      );
+      const existingChatbots = await loadUserChatbots(
+        options.supabaseAdminClient,
+        user.id,
+      );
 
       if (existingChatbots.length >= chatbotLimit) {
         throw new AppError(
           `Chatbot limit reached (${chatbotLimit}). Upgrade your plan to add more integrations.`,
           403,
-        )
+        );
       }
 
-      const createdDefaultChatbot = await ensureDefaultChatbot(options.supabaseAdminClient, {
-        userId: user.id,
-        clientId: client.id,
-        websiteUrl: parsed.data.website_url?.trim() || client.website_url,
-        businessName: parsed.data.name,
-      })
+      const createdDefaultChatbot = await ensureDefaultChatbot(
+        options.supabaseAdminClient,
+        {
+          userId: user.id,
+          clientId: client.id,
+          websiteUrl: parsed.data.website_url?.trim() || client.website_url,
+          businessName: parsed.data.name,
+        },
+      );
 
       if (existingChatbots.length === 0) {
-        response.status(201).json({ ok: true, chatbot: createdDefaultChatbot })
-        return
+        response.status(201).json({ ok: true, chatbot: createdDefaultChatbot });
+        return;
       }
 
-      const allowedDomains = buildAllowedDomains(parsed.data.website_url?.trim() || null, parsed.data.allowed_domains)
+      const allowedDomains = buildAllowedDomains(
+        parsed.data.website_url?.trim() || null,
+        parsed.data.allowed_domains,
+      );
 
       const { data, error } = await options.supabaseAdminClient
-        .from('chatbots')
+        .from("chatbots")
         .insert({
           user_id: user.id,
           client_id: client.id,
@@ -445,100 +527,109 @@ export function createDashboardRouter(options: DashboardRouterOptions): Router {
           branding: {},
         })
         .select(
-          'id, user_id, client_id, name, website_url, allowed_domains, widget_public_key, logo_path, logo_updated_at, is_active, branding, created_at, updated_at',
+          "id, user_id, client_id, name, website_url, allowed_domains, widget_public_key, logo_path, logo_updated_at, is_active, branding, created_at, updated_at",
         )
-        .single()
+        .single();
 
       if (error || !data) {
-        throw new AppError('Failed to create chatbot', 500, error)
+        throw new AppError("Failed to create chatbot", 500, error);
       }
 
       await writeAuditLog({
         supabaseAdminClient: options.supabaseAdminClient,
         actorUserId: user.id,
-        action: 'dashboard.chatbot.create',
+        action: "dashboard.chatbot.create",
         metadata: { chatbotId: data.id },
-      })
+      });
 
-      response.status(201).json({ ok: true, chatbot: data })
+      response.status(201).json({ ok: true, chatbot: data });
     }),
-  )
+  );
 
   router.patch(
-    '/chatbots/:id',
+    "/chatbots/:id",
     asyncHandler(async (request, response) => {
-      const parsed = dashboardChatbotUpdateSchema.safeParse(request.body)
+      const parsed = dashboardChatbotUpdateSchema.safeParse(request.body);
       if (!parsed.success) {
-        return respondValidationError(parsed.error, response)
+        return respondValidationError(parsed.error, response);
       }
 
-      const chatbotId = toSingleParam(request.params.id)
+      const chatbotId = toSingleParam(request.params.id);
       if (!chatbotId) {
-        throw new AppError('Chatbot id is required', 400)
+        throw new AppError("Chatbot id is required", 400);
       }
 
-      const authRequest = asAuthenticatedRequest(request)
-      const existingChatbot = await loadChatbotById(options.supabaseAdminClient, chatbotId)
-      const isOwner = existingChatbot?.user_id === authRequest.user.userId
-      const canManageChatbot = authRequest.user.role === 'admin' || isOwner
+      const authRequest = asAuthenticatedRequest(request);
+      const existingChatbot = await loadChatbotById(
+        options.supabaseAdminClient,
+        chatbotId,
+      );
+      const isOwner = existingChatbot?.user_id === authRequest.user.userId;
+      const canManageChatbot = authRequest.user.role === "admin" || isOwner;
       if (!existingChatbot || !canManageChatbot) {
-        throw new AppError('Chatbot not found', 404)
+        throw new AppError("Chatbot not found", 404);
       }
 
-      const payload: Record<string, unknown> = {}
+      const payload: Record<string, unknown> = {};
       if (parsed.data.name !== undefined) {
-        payload.name = parsed.data.name
+        payload.name = parsed.data.name;
       }
       if (parsed.data.website_url !== undefined) {
-        payload.website_url = parsed.data.website_url?.trim() || null
+        payload.website_url = parsed.data.website_url?.trim() || null;
       }
       if (parsed.data.is_active !== undefined) {
-        payload.is_active = parsed.data.is_active
+        payload.is_active = parsed.data.is_active;
       }
-      if (parsed.data.allowed_domains !== undefined || parsed.data.website_url !== undefined) {
+      if (
+        parsed.data.allowed_domains !== undefined ||
+        parsed.data.website_url !== undefined
+      ) {
         payload.allowed_domains = buildAllowedDomains(
           parsed.data.website_url?.trim() || existingChatbot.website_url,
           parsed.data.allowed_domains,
-        )
+        );
       }
-      payload.updated_at = new Date().toISOString()
+      payload.updated_at = new Date().toISOString();
 
       let updateQuery = options.supabaseAdminClient
-        .from('chatbots')
+        .from("chatbots")
         .update(payload)
-        .eq('id', chatbotId)
+        .eq("id", chatbotId)
         .select(
-          'id, user_id, client_id, name, website_url, allowed_domains, widget_public_key, logo_path, logo_updated_at, is_active, branding, created_at, updated_at',
-        )
+          "id, user_id, client_id, name, website_url, allowed_domains, widget_public_key, logo_path, logo_updated_at, is_active, branding, created_at, updated_at",
+        );
 
-      if (authRequest.user.role !== 'admin') {
-        updateQuery = updateQuery.eq('user_id', authRequest.user.userId)
+      if (authRequest.user.role !== "admin") {
+        updateQuery = updateQuery.eq("user_id", authRequest.user.userId);
       }
 
-      const { data, error } = await updateQuery.single()
+      const { data, error } = await updateQuery.single();
 
       if (error || !data) {
-        throw new AppError('Failed to update chatbot', 500, error)
+        throw new AppError("Failed to update chatbot", 500, error);
       }
 
-      response.json({ ok: true, chatbot: data })
+      response.json({ ok: true, chatbot: data });
     }),
-  )
+  );
 
   router.delete(
-    '/chatbots/:id',
+    "/chatbots/:id",
     asyncHandler(async (request, response) => {
-      const chatbotId = toSingleParam(request.params.id)
+      const chatbotId = toSingleParam(request.params.id);
       if (!chatbotId) {
-        throw new AppError('Chatbot id is required', 400)
+        throw new AppError("Chatbot id is required", 400);
       }
 
-      const authRequest = asAuthenticatedRequest(request)
-      const chatbot = await loadChatbotById(options.supabaseAdminClient, chatbotId)
-      const isOwner = chatbot?.user_id === authRequest.user.userId
-      const canManageChatbot = authRequest.user.role === 'admin' || isOwner
+      const authRequest = asAuthenticatedRequest(request);
+      const chatbot = await loadChatbotById(
+        options.supabaseAdminClient,
+        chatbotId,
+      );
+      const isOwner = chatbot?.user_id === authRequest.user.userId;
+      const canManageChatbot = authRequest.user.role === "admin" || isOwner;
       if (!chatbot || !canManageChatbot) {
-        throw new AppError('Chatbot not found', 404)
+        throw new AppError("Chatbot not found", 404);
       }
 
       if (chatbot.logo_path) {
@@ -546,40 +637,46 @@ export function createDashboardRouter(options: DashboardRouterOptions): Router {
           supabaseAdminClient: options.supabaseAdminClient,
           bucket: LOGO_BUCKET,
           storagePath: chatbot.logo_path,
-        })
+        });
       }
 
-      let deleteQuery = options.supabaseAdminClient.from('chatbots').delete().eq('id', chatbotId)
-      if (authRequest.user.role !== 'admin') {
-        deleteQuery = deleteQuery.eq('user_id', authRequest.user.userId)
+      let deleteQuery = options.supabaseAdminClient
+        .from("chatbots")
+        .delete()
+        .eq("id", chatbotId);
+      if (authRequest.user.role !== "admin") {
+        deleteQuery = deleteQuery.eq("user_id", authRequest.user.userId);
       }
 
-      const { error } = await deleteQuery
+      const { error } = await deleteQuery;
 
       if (error) {
-        throw new AppError('Failed to delete chatbot', 500, error)
+        throw new AppError("Failed to delete chatbot", 500, error);
       }
 
-      response.json({ ok: true })
+      response.json({ ok: true });
     }),
-  )
+  );
 
   router.get(
-    '/embed/:chatbotId',
+    "/embed/:chatbotId",
     asyncHandler(async (request, response) => {
-      const authRequest = asAuthenticatedRequest(request)
-      const chatbotId = toSingleParam(request.params.chatbotId)
+      const authRequest = asAuthenticatedRequest(request);
+      const chatbotId = toSingleParam(request.params.chatbotId);
       if (!chatbotId) {
-        throw new AppError('chatbotId is required', 400)
+        throw new AppError("chatbotId is required", 400);
       }
 
-      const chatbot = await loadChatbotById(options.supabaseAdminClient, chatbotId)
+      const chatbot = await loadChatbotById(
+        options.supabaseAdminClient,
+        chatbotId,
+      );
       if (!chatbot || chatbot.user_id !== authRequest.user.userId) {
-        throw new AppError('Chatbot not found', 404)
+        throw new AppError("Chatbot not found", 404);
       }
 
-      const backendBase = trimTrailingSlash(options.backendBaseUrl)
-      const snippet = `<script src="${backendBase}/widget/kufu.js?key=${encodeURIComponent(chatbot.widget_public_key)}" async></script>`
+      const backendBase = trimTrailingSlash(options.backendBaseUrl);
+      const snippet = `<script src="${backendBase}/widget/kufu.js?key=${encodeURIComponent(chatbot.widget_public_key)}" async></script>`;
 
       response.json({
         ok: true,
@@ -589,24 +686,27 @@ export function createDashboardRouter(options: DashboardRouterOptions): Router {
           widget_public_key: chatbot.widget_public_key,
         },
         snippet,
-      })
+      });
     }),
-  )
+  );
 
   router.get(
-    '/chatbots/:id/logo',
+    "/chatbots/:id/logo",
     asyncHandler(async (request, response) => {
-      const chatbotId = toSingleParam(request.params.id)
+      const chatbotId = toSingleParam(request.params.id);
       if (!chatbotId) {
-        throw new AppError('Chatbot id is required', 400)
+        throw new AppError("Chatbot id is required", 400);
       }
 
-      const authRequest = asAuthenticatedRequest(request)
-      const chatbot = await loadChatbotById(options.supabaseAdminClient, chatbotId)
-      const isOwner = chatbot?.user_id === authRequest.user.userId
-      const canManageChatbot = authRequest.user.role === 'admin' || isOwner
+      const authRequest = asAuthenticatedRequest(request);
+      const chatbot = await loadChatbotById(
+        options.supabaseAdminClient,
+        chatbotId,
+      );
+      const isOwner = chatbot?.user_id === authRequest.user.userId;
+      const canManageChatbot = authRequest.user.role === "admin" || isOwner;
       if (!chatbot || !canManageChatbot) {
-        throw new AppError('Chatbot not found', 404)
+        throw new AppError("Chatbot not found", 404);
       }
 
       const logoUrl = await createSignedStorageUrl({
@@ -614,52 +714,61 @@ export function createDashboardRouter(options: DashboardRouterOptions): Router {
         bucket: LOGO_BUCKET,
         storagePath: chatbot.logo_path,
         expiresInSeconds: 3600,
-      })
+      });
 
       response.json({
         ok: true,
         logoUrl,
-      })
+      });
     }),
-  )
+  );
 
   router.post(
-    '/chatbots/:id/logo',
-    uploadParser.single('file'),
+    "/chatbots/:id/logo",
+    uploadParser.single("file"),
     asyncHandler(async (request, response) => {
-      const chatbotId = toSingleParam(request.params.id)
+      const chatbotId = toSingleParam(request.params.id);
       if (!chatbotId) {
-        throw new AppError('Chatbot id is required', 400)
+        throw new AppError("Chatbot id is required", 400);
       }
 
-      const authRequest = asAuthenticatedRequest(request)
-      const chatbot = await loadChatbotById(options.supabaseAdminClient, chatbotId)
-      const isOwner = chatbot?.user_id === authRequest.user.userId
-      const canManageChatbot = authRequest.user.role === 'admin' || isOwner
+      const authRequest = asAuthenticatedRequest(request);
+      const chatbot = await loadChatbotById(
+        options.supabaseAdminClient,
+        chatbotId,
+      );
+      const isOwner = chatbot?.user_id === authRequest.user.userId;
+      const canManageChatbot = authRequest.user.role === "admin" || isOwner;
       if (!chatbot || !canManageChatbot) {
-        throw new AppError('Chatbot not found', 404)
+        throw new AppError("Chatbot not found", 404);
       }
 
-      if (authRequest.user.role !== 'admin') {
+      if (authRequest.user.role !== "admin") {
         const planContext = await getUserPlanContext(
           options.supabaseAdminClient,
           authRequest.user.userId,
           authRequest.user.role,
-        )
+        );
         assertStarterPlusUploadAccess({
           role: authRequest.user.role,
           planCode: planContext.planCode,
-        })
+        });
       }
 
-      const parsedFile = parseUploadedFile(authRequest)
+      const parsedFile = parseUploadedFile(authRequest);
 
       if (!ALLOWED_LOGO_MIME_TYPES.has(parsedFile.mimetype)) {
-        throw new AppError('Invalid logo file type. Use PNG, JPG, WEBP, or SVG.', 400)
+        throw new AppError(
+          "Invalid logo file type. Use PNG, JPG, WEBP, or SVG.",
+          400,
+        );
       }
 
       if (parsedFile.size > MAX_LOGO_SIZE_BYTES) {
-        throw new AppError('Logo file too large. Max allowed size is 2MB.', 400)
+        throw new AppError(
+          "Logo file too large. Max allowed size is 2MB.",
+          400,
+        );
       }
 
       if (chatbot.logo_path) {
@@ -667,14 +776,14 @@ export function createDashboardRouter(options: DashboardRouterOptions): Router {
           supabaseAdminClient: options.supabaseAdminClient,
           bucket: LOGO_BUCKET,
           storagePath: chatbot.logo_path,
-        })
+        });
       }
 
       const storagePath = buildLogoStoragePath({
         userId: chatbot.user_id,
         chatbotId: chatbot.id,
         originalName: parsedFile.originalname,
-      })
+      });
 
       await uploadBufferToStorage({
         supabaseAdminClient: options.supabaseAdminClient,
@@ -682,23 +791,24 @@ export function createDashboardRouter(options: DashboardRouterOptions): Router {
         storagePath,
         fileBuffer: parsedFile.buffer,
         contentType: parsedFile.mimetype,
-      })
+      });
 
-      const { data: updatedChatbot, error: updateError } = await options.supabaseAdminClient
-        .from('chatbots')
-        .update({
-          logo_path: storagePath,
-          logo_updated_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', chatbot.id)
-        .select(
-          'id, user_id, client_id, name, website_url, allowed_domains, widget_public_key, logo_path, logo_updated_at, is_active, branding, created_at, updated_at',
-        )
-        .single()
+      const { data: updatedChatbot, error: updateError } =
+        await options.supabaseAdminClient
+          .from("chatbots")
+          .update({
+            logo_path: storagePath,
+            logo_updated_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", chatbot.id)
+          .select(
+            "id, user_id, client_id, name, website_url, allowed_domains, widget_public_key, logo_path, logo_updated_at, is_active, branding, created_at, updated_at",
+          )
+          .single();
 
       if (updateError || !updatedChatbot) {
-        throw new AppError('Failed to save chatbot logo', 500, updateError)
+        throw new AppError("Failed to save chatbot logo", 500, updateError);
       }
 
       const logoUrl = await createSignedStorageUrl({
@@ -706,41 +816,44 @@ export function createDashboardRouter(options: DashboardRouterOptions): Router {
         bucket: LOGO_BUCKET,
         storagePath: updatedChatbot.logo_path,
         expiresInSeconds: 3600,
-      })
+      });
 
       response.status(201).json({
         ok: true,
         logoUrl,
-      })
+      });
     }),
-  )
+  );
 
   router.delete(
-    '/chatbots/:id/logo',
+    "/chatbots/:id/logo",
     asyncHandler(async (request, response) => {
-      const chatbotId = toSingleParam(request.params.id)
+      const chatbotId = toSingleParam(request.params.id);
       if (!chatbotId) {
-        throw new AppError('Chatbot id is required', 400)
+        throw new AppError("Chatbot id is required", 400);
       }
 
-      const authRequest = asAuthenticatedRequest(request)
-      const chatbot = await loadChatbotById(options.supabaseAdminClient, chatbotId)
-      const isOwner = chatbot?.user_id === authRequest.user.userId
-      const canManageChatbot = authRequest.user.role === 'admin' || isOwner
+      const authRequest = asAuthenticatedRequest(request);
+      const chatbot = await loadChatbotById(
+        options.supabaseAdminClient,
+        chatbotId,
+      );
+      const isOwner = chatbot?.user_id === authRequest.user.userId;
+      const canManageChatbot = authRequest.user.role === "admin" || isOwner;
       if (!chatbot || !canManageChatbot) {
-        throw new AppError('Chatbot not found', 404)
+        throw new AppError("Chatbot not found", 404);
       }
 
-      if (authRequest.user.role !== 'admin') {
+      if (authRequest.user.role !== "admin") {
         const planContext = await getUserPlanContext(
           options.supabaseAdminClient,
           authRequest.user.userId,
           authRequest.user.role,
-        )
+        );
         assertStarterPlusUploadAccess({
           role: authRequest.user.role,
           planCode: planContext.planCode,
-        })
+        });
       }
 
       if (chatbot.logo_path) {
@@ -748,104 +861,115 @@ export function createDashboardRouter(options: DashboardRouterOptions): Router {
           supabaseAdminClient: options.supabaseAdminClient,
           bucket: LOGO_BUCKET,
           storagePath: chatbot.logo_path,
-        })
+        });
       }
 
       const { error: updateError } = await options.supabaseAdminClient
-        .from('chatbots')
+        .from("chatbots")
         .update({
           logo_path: null,
           logo_updated_at: null,
           updated_at: new Date().toISOString(),
         })
-        .eq('id', chatbot.id)
+        .eq("id", chatbot.id);
 
       if (updateError) {
-        throw new AppError('Failed to remove chatbot logo', 500, updateError)
+        throw new AppError("Failed to remove chatbot logo", 500, updateError);
       }
 
-      response.json({ ok: true })
+      response.json({ ok: true });
     }),
-  )
+  );
 
   router.get(
-    '/chatbots/:id/kb-files',
+    "/chatbots/:id/kb-files",
     asyncHandler(async (request, response) => {
-      const chatbotId = toSingleParam(request.params.id)
+      const chatbotId = toSingleParam(request.params.id);
       if (!chatbotId) {
-        throw new AppError('Chatbot id is required', 400)
+        throw new AppError("Chatbot id is required", 400);
       }
 
-      const authRequest = asAuthenticatedRequest(request)
-      const chatbot = await loadChatbotById(options.supabaseAdminClient, chatbotId)
-      const isOwner = chatbot?.user_id === authRequest.user.userId
-      const canManageChatbot = authRequest.user.role === 'admin' || isOwner
+      const authRequest = asAuthenticatedRequest(request);
+      const chatbot = await loadChatbotById(
+        options.supabaseAdminClient,
+        chatbotId,
+      );
+      const isOwner = chatbot?.user_id === authRequest.user.userId;
+      const canManageChatbot = authRequest.user.role === "admin" || isOwner;
       if (!chatbot || !canManageChatbot) {
-        throw new AppError('Chatbot not found', 404)
+        throw new AppError("Chatbot not found", 404);
       }
 
       const { data, error } = await options.supabaseAdminClient
-        .from('kb_files')
-        .select('id, chatbot_id, user_id, filename, mime_type, storage_path, file_size, created_at')
-        .eq('chatbot_id', chatbot.id)
-        .order('created_at', { ascending: false })
-        .returns<KbFileRow[]>()
+        .from("kb_files")
+        .select(
+          "id, chatbot_id, user_id, filename, mime_type, storage_path, file_size, created_at",
+        )
+        .eq("chatbot_id", chatbot.id)
+        .order("created_at", { ascending: false })
+        .returns<KbFileRow[]>();
 
       if (error) {
-        throw new AppError('Failed to load knowledge files', 500, error)
+        throw new AppError("Failed to load knowledge files", 500, error);
       }
 
       response.json({
         ok: true,
         files: data ?? [],
-      })
+      });
     }),
-  )
+  );
 
   router.post(
-    '/chatbots/:id/kb-files',
-    uploadParser.single('file'),
+    "/chatbots/:id/kb-files",
+    uploadParser.single("file"),
     asyncHandler(async (request, response) => {
-      const chatbotId = toSingleParam(request.params.id)
+      const chatbotId = toSingleParam(request.params.id);
       if (!chatbotId) {
-        throw new AppError('Chatbot id is required', 400)
+        throw new AppError("Chatbot id is required", 400);
       }
 
-      const authRequest = asAuthenticatedRequest(request)
-      const chatbot = await loadChatbotById(options.supabaseAdminClient, chatbotId)
-      const isOwner = chatbot?.user_id === authRequest.user.userId
-      const canManageChatbot = authRequest.user.role === 'admin' || isOwner
+      const authRequest = asAuthenticatedRequest(request);
+      const chatbot = await loadChatbotById(
+        options.supabaseAdminClient,
+        chatbotId,
+      );
+      const isOwner = chatbot?.user_id === authRequest.user.userId;
+      const canManageChatbot = authRequest.user.role === "admin" || isOwner;
       if (!chatbot || !canManageChatbot) {
-        throw new AppError('Chatbot not found', 404)
+        throw new AppError("Chatbot not found", 404);
       }
 
-      if (authRequest.user.role !== 'admin') {
+      if (authRequest.user.role !== "admin") {
         const planContext = await getUserPlanContext(
           options.supabaseAdminClient,
           authRequest.user.userId,
           authRequest.user.role,
-        )
+        );
         assertStarterPlusUploadAccess({
           role: authRequest.user.role,
           planCode: planContext.planCode,
-        })
+        });
       }
 
-      const parsedFile = parseUploadedFile(authRequest)
+      const parsedFile = parseUploadedFile(authRequest);
 
       if (!ALLOWED_KB_MIME_TYPES.has(parsedFile.mimetype)) {
-        throw new AppError('Invalid file type. Only PDF, DOC, and DOCX are allowed.', 400)
+        throw new AppError(
+          "Invalid file type. Only PDF, DOC, and DOCX are allowed.",
+          400,
+        );
       }
 
       if (parsedFile.size > MAX_KB_FILE_SIZE_BYTES) {
-        throw new AppError('File too large. Max allowed size is 10MB.', 400)
+        throw new AppError("File too large. Max allowed size is 10MB.", 400);
       }
 
       const storagePath = buildKbStoragePath({
         userId: chatbot.user_id,
         chatbotId: chatbot.id,
         originalName: parsedFile.originalname,
-      })
+      });
 
       await uploadBufferToStorage({
         supabaseAdminClient: options.supabaseAdminClient,
@@ -853,23 +977,30 @@ export function createDashboardRouter(options: DashboardRouterOptions): Router {
         storagePath,
         fileBuffer: parsedFile.buffer,
         contentType: parsedFile.mimetype,
-      })
+      });
 
-      const { data: insertedFile, error: insertError } = await options.supabaseAdminClient
-        .from('kb_files')
-        .insert({
-          chatbot_id: chatbot.id,
-          user_id: chatbot.user_id,
-          filename: parsedFile.originalname,
-          mime_type: parsedFile.mimetype,
-          storage_path: storagePath,
-          file_size: parsedFile.size,
-        })
-        .select('id, chatbot_id, user_id, filename, mime_type, storage_path, file_size, created_at')
-        .single<KbFileRow>()
+      const { data: insertedFile, error: insertError } =
+        await options.supabaseAdminClient
+          .from("kb_files")
+          .insert({
+            chatbot_id: chatbot.id,
+            user_id: chatbot.user_id,
+            filename: parsedFile.originalname,
+            mime_type: parsedFile.mimetype,
+            storage_path: storagePath,
+            file_size: parsedFile.size,
+          })
+          .select(
+            "id, chatbot_id, user_id, filename, mime_type, storage_path, file_size, created_at",
+          )
+          .single<KbFileRow>();
 
       if (insertError || !insertedFile) {
-        throw new AppError('Failed to save knowledge file metadata', 500, insertError)
+        throw new AppError(
+          "Failed to save knowledge file metadata",
+          500,
+          insertError,
+        );
       }
 
       response.status(201).json({
@@ -881,72 +1012,84 @@ export function createDashboardRouter(options: DashboardRouterOptions): Router {
           file_size: insertedFile.file_size,
           created_at: insertedFile.created_at,
         },
-      })
+      });
     }),
-  )
+  );
 
   router.delete(
-    '/kb-files/:fileId',
+    "/kb-files/:fileId",
     asyncHandler(async (request, response) => {
-      const fileId = toSingleParam(request.params.fileId)
+      const fileId = toSingleParam(request.params.fileId);
       if (!fileId) {
-        throw new AppError('File id is required', 400)
+        throw new AppError("File id is required", 400);
       }
 
-      const authRequest = asAuthenticatedRequest(request)
-      const { data: kbFile, error: kbFileError } = await options.supabaseAdminClient
-        .from('kb_files')
-        .select('id, chatbot_id, user_id, filename, mime_type, storage_path, file_size, created_at')
-        .eq('id', fileId)
-        .maybeSingle<KbFileRow>()
+      const authRequest = asAuthenticatedRequest(request);
+      const { data: kbFile, error: kbFileError } =
+        await options.supabaseAdminClient
+          .from("kb_files")
+          .select(
+            "id, chatbot_id, user_id, filename, mime_type, storage_path, file_size, created_at",
+          )
+          .eq("id", fileId)
+          .maybeSingle<KbFileRow>();
 
       if (kbFileError) {
-        throw new AppError('Failed to load knowledge file', 500, kbFileError)
+        throw new AppError("Failed to load knowledge file", 500, kbFileError);
       }
 
       if (!kbFile) {
-        throw new AppError('Knowledge file not found', 404)
+        throw new AppError("Knowledge file not found", 404);
       }
 
-      const isOwner = kbFile.user_id === authRequest.user.userId
-      const canDelete = authRequest.user.role === 'admin' || isOwner
+      const isOwner = kbFile.user_id === authRequest.user.userId;
+      const canDelete = authRequest.user.role === "admin" || isOwner;
       if (!canDelete) {
-        throw new AppError('Knowledge file not found', 404)
+        throw new AppError("Knowledge file not found", 404);
       }
 
       await removeObjectFromStorage({
         supabaseAdminClient: options.supabaseAdminClient,
         bucket: KB_DOCS_BUCKET,
         storagePath: kbFile.storage_path,
-      })
+      });
 
-      const { error: deleteError } = await options.supabaseAdminClient.from('kb_files').delete().eq('id', kbFile.id)
+      const { error: deleteError } = await options.supabaseAdminClient
+        .from("kb_files")
+        .delete()
+        .eq("id", kbFile.id);
       if (deleteError) {
-        throw new AppError('Failed to delete knowledge file metadata', 500, deleteError)
+        throw new AppError(
+          "Failed to delete knowledge file metadata",
+          500,
+          deleteError,
+        );
       }
 
-      response.json({ ok: true })
+      response.json({ ok: true });
     }),
-  )
+  );
 
   router.get(
-    '/knowledge',
+    "/knowledge",
     asyncHandler(async (request, response) => {
-      const authRequest = asAuthenticatedRequest(request)
+      const authRequest = asAuthenticatedRequest(request);
       const client = await ensureTenantOwnership(
         options.supabaseAdminClient,
         authRequest.user.userId,
         authRequest.user.clientId,
-      )
+      );
 
       const { data, error } = await options.supabaseAdminClient
-        .from('client_knowledge')
-        .select('id, client_id, services_text, pricing_text, faqs_json, hours_text, contact_text, updated_at')
-        .eq('client_id', client.id)
-        .maybeSingle<ClientKnowledgeRow>()
+        .from("client_knowledge")
+        .select(
+          "id, client_id, services_text, pricing_text, faqs_json, hours_text, contact_text, updated_at",
+        )
+        .eq("client_id", client.id)
+        .maybeSingle<ClientKnowledgeRow>();
 
       if (error) {
-        throw new AppError('Failed to load client knowledge', 500, error)
+        throw new AppError("Failed to load client knowledge", 500, error);
       }
 
       response.json({
@@ -958,27 +1101,27 @@ export function createDashboardRouter(options: DashboardRouterOptions): Router {
           faqs_json: data?.faqs_json ?? [],
           hours_text: data?.hours_text ?? null,
           contact_text: data?.contact_text ?? null,
-          knowledge_base_text: client.knowledge_base_text ?? '',
+          knowledge_base_text: client.knowledge_base_text ?? "",
           updated_at: data?.updated_at,
         },
-      })
+      });
     }),
-  )
+  );
 
   router.post(
-    '/knowledge',
+    "/knowledge",
     asyncHandler(async (request, response) => {
-      const parsed = dashboardKnowledgeSchema.safeParse(request.body)
+      const parsed = dashboardKnowledgeSchema.safeParse(request.body);
       if (!parsed.success) {
-        return respondValidationError(parsed.error, response)
+        return respondValidationError(parsed.error, response);
       }
 
-      const authRequest = asAuthenticatedRequest(request)
+      const authRequest = asAuthenticatedRequest(request);
       const client = await ensureTenantOwnership(
         options.supabaseAdminClient,
         authRequest.user.userId,
         authRequest.user.clientId,
-      )
+      );
 
       const knowledgePayload = {
         client_id: client.id,
@@ -988,253 +1131,284 @@ export function createDashboardRouter(options: DashboardRouterOptions): Router {
         hours_text: parsed.data.hours_text ?? null,
         contact_text: parsed.data.contact_text ?? null,
         updated_at: new Date().toISOString(),
-      }
+      };
 
-      const { data: upsertedKnowledge, error: knowledgeError } = await options.supabaseAdminClient
-        .from('client_knowledge')
-        .upsert(knowledgePayload, { onConflict: 'client_id' })
-        .select('id, client_id, services_text, pricing_text, faqs_json, hours_text, contact_text, updated_at')
-        .single<ClientKnowledgeRow>()
+      const { data: upsertedKnowledge, error: knowledgeError } =
+        await options.supabaseAdminClient
+          .from("client_knowledge")
+          .upsert(knowledgePayload, { onConflict: "client_id" })
+          .select(
+            "id, client_id, services_text, pricing_text, faqs_json, hours_text, contact_text, updated_at",
+          )
+          .single<ClientKnowledgeRow>();
 
       if (knowledgeError || !upsertedKnowledge) {
-        throw new AppError('Failed to save knowledge', 500, knowledgeError)
+        throw new AppError("Failed to save knowledge", 500, knowledgeError);
       }
 
-      const { data: updatedClient, error: clientUpdateError } = await options.supabaseAdminClient
-        .from('clients')
-        .update({ knowledge_base_text: parsed.data.knowledge_base_text ?? '' })
-        .eq('id', client.id)
-        .select('id, user_id, business_name, website_url, plan, knowledge_base_text, created_at')
-        .single()
+      const { data: updatedClient, error: clientUpdateError } =
+        await options.supabaseAdminClient
+          .from("clients")
+          .update({
+            knowledge_base_text: parsed.data.knowledge_base_text ?? "",
+          })
+          .eq("id", client.id)
+          .select(
+            "id, user_id, business_name, website_url, plan, knowledge_base_text, created_at",
+          )
+          .single();
 
       if (clientUpdateError || !updatedClient) {
-        throw new AppError('Failed to save primary knowledge text', 500, clientUpdateError)
+        throw new AppError(
+          "Failed to save primary knowledge text",
+          500,
+          clientUpdateError,
+        );
       }
 
       response.json({
         ok: true,
         knowledge: {
           ...upsertedKnowledge,
-          knowledge_base_text: updatedClient.knowledge_base_text ?? '',
+          knowledge_base_text: updatedClient.knowledge_base_text ?? "",
         },
-      })
+      });
     }),
-  )
+  );
 
   router.get(
-    '/tickets',
+    "/tickets",
     asyncHandler(async (request, response) => {
-      const authRequest = asAuthenticatedRequest(request)
+      const authRequest = asAuthenticatedRequest(request);
       const { data, error } = await options.supabaseAdminClient
-        .from('tickets')
-        .select('id, user_id, subject, message, admin_response, status, created_at, updated_at')
-        .eq('user_id', authRequest.user.userId)
-        .order('created_at', { ascending: false })
+        .from("tickets")
+        .select(
+          "id, user_id, subject, message, admin_response, status, created_at, updated_at",
+        )
+        .eq("user_id", authRequest.user.userId)
+        .order("created_at", { ascending: false });
 
       if (error) {
-        throw new AppError('Failed to load tickets', 500, error)
+        throw new AppError("Failed to load tickets", 500, error);
       }
 
-      response.json({ ok: true, tickets: data ?? [] })
+      response.json({ ok: true, tickets: data ?? [] });
     }),
-  )
+  );
 
   router.post(
-    '/tickets',
+    "/tickets",
     asyncHandler(async (request, response) => {
-      const parsed = dashboardTicketCreateSchema.safeParse(request.body)
+      const parsed = dashboardTicketCreateSchema.safeParse(request.body);
       if (!parsed.success) {
-        return respondValidationError(parsed.error, response)
+        return respondValidationError(parsed.error, response);
       }
 
-      const authRequest = asAuthenticatedRequest(request)
+      const authRequest = asAuthenticatedRequest(request);
       const { data, error } = await options.supabaseAdminClient
-        .from('tickets')
+        .from("tickets")
         .insert({
           user_id: authRequest.user.userId,
           subject: parsed.data.subject,
           message: parsed.data.message,
-          status: 'open',
+          status: "open",
           updated_at: new Date().toISOString(),
         })
-        .select('id, user_id, subject, message, admin_response, status, created_at, updated_at')
-        .single()
+        .select(
+          "id, user_id, subject, message, admin_response, status, created_at, updated_at",
+        )
+        .single();
 
       if (error || !data) {
-        throw new AppError('Failed to create ticket', 500, error)
+        throw new AppError("Failed to create ticket", 500, error);
       }
 
-      response.status(201).json({ ok: true, ticket: data })
+      response.status(201).json({ ok: true, ticket: data });
     }),
-  )
+  );
 
   router.patch(
-    '/tickets/:id',
+    "/tickets/:id",
     asyncHandler(async (request, response) => {
-      const parsed = dashboardTicketUpdateSchema.safeParse(request.body)
+      const parsed = dashboardTicketUpdateSchema.safeParse(request.body);
       if (!parsed.success) {
-        return respondValidationError(parsed.error, response)
+        return respondValidationError(parsed.error, response);
       }
 
-      const ticketId = toSingleParam(request.params.id)
+      const ticketId = toSingleParam(request.params.id);
       if (!ticketId) {
-        throw new AppError('Ticket id is required', 400)
+        throw new AppError("Ticket id is required", 400);
       }
 
-      const authRequest = asAuthenticatedRequest(request)
-      if (parsed.data.status !== 'closed') {
-        throw new AppError('Users can only close tickets', 403)
+      const authRequest = asAuthenticatedRequest(request);
+      if (parsed.data.status !== "closed") {
+        throw new AppError("Users can only close tickets", 403);
       }
 
       const { data, error } = await options.supabaseAdminClient
-        .from('tickets')
+        .from("tickets")
         .update({
-          status: 'closed',
+          status: "closed",
           updated_at: new Date().toISOString(),
         })
-        .eq('id', ticketId)
-        .eq('user_id', authRequest.user.userId)
-        .select('id, user_id, subject, message, admin_response, status, created_at, updated_at')
-        .single()
+        .eq("id", ticketId)
+        .eq("user_id", authRequest.user.userId)
+        .select(
+          "id, user_id, subject, message, admin_response, status, created_at, updated_at",
+        )
+        .single();
 
       if (error || !data) {
-        throw new AppError('Failed to update ticket', 500, error)
+        throw new AppError("Failed to update ticket", 500, error);
       }
 
-      response.json({ ok: true, ticket: data })
+      response.json({ ok: true, ticket: data });
     }),
-  )
+  );
 
   router.get(
-    '/quotes',
+    "/quotes",
     asyncHandler(async (request, response) => {
-      const authRequest = asAuthenticatedRequest(request)
+      const authRequest = asAuthenticatedRequest(request);
 
       const { data, error } = await options.supabaseAdminClient
-        .from('custom_quotes')
+        .from("custom_quotes")
         .select(
-          'id, user_id, requested_plan, requested_chatbots, requested_unlimited_messages, notes, status, admin_response, created_at, updated_at',
+          "id, user_id, requested_plan, requested_chatbots, requested_unlimited_messages, notes, status, admin_response, created_at, updated_at",
         )
-        .eq('user_id', authRequest.user.userId)
-        .order('created_at', { ascending: false })
+        .eq("user_id", authRequest.user.userId)
+        .order("created_at", { ascending: false });
 
       if (error) {
-        throw new AppError('Failed to load quote requests', 500, error)
+        throw new AppError("Failed to load quote requests", 500, error);
       }
 
-      response.json({ ok: true, quotes: data ?? [] })
+      response.json({ ok: true, quotes: data ?? [] });
     }),
-  )
+  );
 
   router.post(
-    '/quotes',
+    "/quotes",
     asyncHandler(async (request, response) => {
-      const parsed = dashboardQuoteCreateSchema.safeParse(request.body)
+      const parsed = dashboardQuoteCreateSchema.safeParse(request.body);
       if (!parsed.success) {
-        return respondValidationError(parsed.error, response)
+        return respondValidationError(parsed.error, response);
       }
 
-      const authRequest = asAuthenticatedRequest(request)
+      const authRequest = asAuthenticatedRequest(request);
 
-      const { data: existingPending, error: existingError } = await options.supabaseAdminClient
-        .from('custom_quotes')
-        .select('id')
-        .eq('user_id', authRequest.user.userId)
-        .eq('status', 'pending')
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle<{ id: string }>()
+      const { data: existingPending, error: existingError } =
+        await options.supabaseAdminClient
+          .from("custom_quotes")
+          .select("id")
+          .eq("user_id", authRequest.user.userId)
+          .eq("status", "pending")
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle<{ id: string }>();
 
       if (existingError) {
-        throw new AppError('Failed to load existing quote request', 500, existingError)
+        throw new AppError(
+          "Failed to load existing quote request",
+          500,
+          existingError,
+        );
       }
 
-      let quoteResponse: unknown
+      let quoteResponse: unknown;
       if (existingPending?.id) {
         const { data, error } = await options.supabaseAdminClient
-          .from('custom_quotes')
+          .from("custom_quotes")
           .update({
             requested_plan: parsed.data.requested_plan ?? null,
             requested_chatbots: parsed.data.requested_chatbots ?? null,
-            requested_unlimited_messages: parsed.data.requested_unlimited_messages,
+            requested_unlimited_messages:
+              parsed.data.requested_unlimited_messages,
             notes: parsed.data.notes,
-            status: 'pending',
+            status: "pending",
             updated_at: new Date().toISOString(),
           })
-          .eq('id', existingPending.id)
+          .eq("id", existingPending.id)
           .select(
-            'id, user_id, requested_plan, requested_chatbots, requested_unlimited_messages, notes, status, admin_response, created_at, updated_at',
+            "id, user_id, requested_plan, requested_chatbots, requested_unlimited_messages, notes, status, admin_response, created_at, updated_at",
           )
-          .single()
+          .single();
 
         if (error || !data) {
-          throw new AppError('Failed to update quote request', 500, error)
+          throw new AppError("Failed to update quote request", 500, error);
         }
 
-        quoteResponse = data
+        quoteResponse = data;
       } else {
         const { data, error } = await options.supabaseAdminClient
-          .from('custom_quotes')
+          .from("custom_quotes")
           .insert({
             user_id: authRequest.user.userId,
             requested_plan: parsed.data.requested_plan ?? null,
             requested_chatbots: parsed.data.requested_chatbots ?? null,
-            requested_unlimited_messages: parsed.data.requested_unlimited_messages,
+            requested_unlimited_messages:
+              parsed.data.requested_unlimited_messages,
             notes: parsed.data.notes,
-            status: 'pending',
+            status: "pending",
             updated_at: new Date().toISOString(),
           })
           .select(
-            'id, user_id, requested_plan, requested_chatbots, requested_unlimited_messages, notes, status, admin_response, created_at, updated_at',
+            "id, user_id, requested_plan, requested_chatbots, requested_unlimited_messages, notes, status, admin_response, created_at, updated_at",
           )
-          .single()
+          .single();
 
         if (error || !data) {
-          throw new AppError('Failed to create quote request', 500, error)
+          throw new AppError("Failed to create quote request", 500, error);
         }
 
-        quoteResponse = data
+        quoteResponse = data;
       }
 
       await writeAuditLog({
         supabaseAdminClient: options.supabaseAdminClient,
         actorUserId: authRequest.user.userId,
-        action: 'dashboard.quote.submit',
-      })
+        action: "dashboard.quote.submit",
+      });
 
-      response.status(201).json({ ok: true, quote: quoteResponse })
+      response.status(201).json({ ok: true, quote: quoteResponse });
     }),
-  )
+  );
 
   router.get(
-    '/chat-history/:chatbotId([0-9a-fA-F-]{36})',
+    "/chat-history/:chatbotId",
     asyncHandler(async (request, response) => {
-      const chatbotId = toSingleParam(request.params.chatbotId)
+      const chatbotId = toSingleParam(request.params.chatbotId);
       if (!chatbotId) {
-        throw new AppError('chatbotId is required', 400)
+        throw new AppError("chatbotId is required", 400);
       }
 
-      const parsedQuery = dashboardChatHistoryQuerySchema.safeParse(request.query)
+      if (!/^[0-9a-fA-F-]{36}$/.test(chatbotId)) {
+        throw new AppError("Invalid chatbotId format", 400);
+      }
+
+      const parsedQuery = dashboardChatHistoryQuerySchema.safeParse(
+        request.query,
+      );
       if (!parsedQuery.success) {
-        return respondValidationError(parsedQuery.error, response)
+        return respondValidationError(parsedQuery.error, response);
       }
 
-      const authRequest = asAuthenticatedRequest(request)
+      const authRequest = asAuthenticatedRequest(request);
       await loadAuthorizedChatbot({
         supabaseAdminClient: options.supabaseAdminClient,
         chatbotId,
         userId: authRequest.user.userId,
         role: authRequest.user.role,
-      })
+      });
 
-      if (authRequest.user.role !== 'admin') {
+      if (authRequest.user.role !== "admin") {
         const planContext = await getUserPlanContext(
           options.supabaseAdminClient,
           authRequest.user.userId,
           authRequest.user.role,
-        )
+        );
         if (!isStarterPlusPlan(planContext.planCode, authRequest.user.role)) {
-          throw new AppError('Access Denied', 403)
+          throw new AppError("Access Denied", 403);
         }
       }
 
@@ -1246,7 +1420,7 @@ export function createDashboardRouter(options: DashboardRouterOptions): Router {
         leadCaptured: toBooleanLeadFilter(parsedQuery.data.leadCaptured),
         limit: parsedQuery.data.limit,
         offset: parsedQuery.data.offset,
-      })
+      });
 
       response.json({
         ok: true,
@@ -1256,34 +1430,36 @@ export function createDashboardRouter(options: DashboardRouterOptions): Router {
           offset: parsedQuery.data.offset,
           total: history.total,
         },
-      })
+      });
     }),
-  )
+  );
 
   router.get(
-    '/chat-history/search',
+    "/chat-history/search",
     asyncHandler(async (request, response) => {
-      const parsedQuery = dashboardChatHistorySearchQuerySchema.safeParse(request.query)
+      const parsedQuery = dashboardChatHistorySearchQuerySchema.safeParse(
+        request.query,
+      );
       if (!parsedQuery.success) {
-        return respondValidationError(parsedQuery.error, response)
+        return respondValidationError(parsedQuery.error, response);
       }
 
-      const authRequest = asAuthenticatedRequest(request)
+      const authRequest = asAuthenticatedRequest(request);
       await loadAuthorizedChatbot({
         supabaseAdminClient: options.supabaseAdminClient,
         chatbotId: parsedQuery.data.chatbotId,
         userId: authRequest.user.userId,
         role: authRequest.user.role,
-      })
+      });
 
-      if (authRequest.user.role !== 'admin') {
+      if (authRequest.user.role !== "admin") {
         const planContext = await getUserPlanContext(
           options.supabaseAdminClient,
           authRequest.user.userId,
           authRequest.user.role,
-        )
+        );
         if (!isStarterPlusPlan(planContext.planCode, authRequest.user.role)) {
-          throw new AppError('Access Denied', 403)
+          throw new AppError("Access Denied", 403);
         }
       }
 
@@ -1296,7 +1472,7 @@ export function createDashboardRouter(options: DashboardRouterOptions): Router {
         leadCaptured: toBooleanLeadFilter(parsedQuery.data.leadCaptured),
         limit: parsedQuery.data.limit,
         offset: parsedQuery.data.offset,
-      })
+      });
 
       response.json({
         ok: true,
@@ -1306,41 +1482,43 @@ export function createDashboardRouter(options: DashboardRouterOptions): Router {
           offset: parsedQuery.data.offset,
           total: history.total,
         },
-      })
+      });
     }),
-  )
+  );
 
   router.get(
-    '/analytics/:chatbotId',
+    "/analytics/:chatbotId",
     asyncHandler(async (request, response) => {
-      const chatbotId = toSingleParam(request.params.chatbotId)
+      const chatbotId = toSingleParam(request.params.chatbotId);
       if (!chatbotId) {
-        throw new AppError('chatbotId is required', 400)
+        throw new AppError("chatbotId is required", 400);
       }
 
-      const parsedQuery = dashboardAnalyticsQuerySchema.safeParse(request.query)
+      const parsedQuery = dashboardAnalyticsQuerySchema.safeParse(
+        request.query,
+      );
       if (!parsedQuery.success) {
-        return respondValidationError(parsedQuery.error, response)
+        return respondValidationError(parsedQuery.error, response);
       }
 
-      const authRequest = asAuthenticatedRequest(request)
+      const authRequest = asAuthenticatedRequest(request);
       await loadAuthorizedChatbot({
         supabaseAdminClient: options.supabaseAdminClient,
         chatbotId,
         userId: authRequest.user.userId,
         role: authRequest.user.role,
-      })
+      });
 
-      if (authRequest.user.role !== 'admin') {
+      if (authRequest.user.role !== "admin") {
         const planContext = await getUserPlanContext(
           options.supabaseAdminClient,
           authRequest.user.userId,
           authRequest.user.role,
-        )
+        );
         assertProOrBusinessAccess({
           role: authRequest.user.role,
           planCode: planContext.planCode,
-        })
+        });
       }
 
       const analytics = await computeChatAnalytics({
@@ -1348,69 +1526,68 @@ export function createDashboardRouter(options: DashboardRouterOptions): Router {
         chatbotId,
         from: parsedQuery.data.from,
         to: parsedQuery.data.to,
-      })
+      });
 
       response.json({
         ok: true,
         ...analytics,
-      })
+      });
     }),
-  )
+  );
 
   router.post(
-    '/test-chat/:chatbotId',
+    "/test-chat/:chatbotId",
     asyncHandler(async (request, response) => {
-      const chatbotId = toSingleParam(request.params.chatbotId)
+      const chatbotId = toSingleParam(request.params.chatbotId);
       if (!chatbotId) {
-        throw new AppError('chatbotId is required', 400)
+        throw new AppError("chatbotId is required", 400);
       }
 
-      const parsedBody = dashboardTestChatSchema.safeParse(request.body)
+      const parsedBody = dashboardTestChatSchema.safeParse(request.body);
       if (!parsedBody.success) {
-        return respondValidationError(parsedBody.error, response)
+        return respondValidationError(parsedBody.error, response);
       }
 
-      const authRequest = asAuthenticatedRequest(request)
+      const authRequest = asAuthenticatedRequest(request);
       const chatbot = await loadAuthorizedChatbot({
         supabaseAdminClient: options.supabaseAdminClient,
         chatbotId,
         userId: authRequest.user.userId,
         role: authRequest.user.role,
-      })
+      });
 
-      const sanitizedMessages = sanitizeMessages(parsedBody.data.messages, 12)
+      const sanitizedMessages = sanitizeMessages(parsedBody.data.messages, 12);
       if (sanitizedMessages.length === 0) {
-        throw new AppError('No valid messages provided.', 400)
+        throw new AppError("No valid messages provided.", 400);
       }
 
       const lastUserMessage = [...sanitizedMessages]
         .reverse()
-        .find((message) => message.role === 'user')
-        ?.content
+        .find((message) => message.role === "user")?.content;
 
       if (!lastUserMessage) {
-        throw new AppError('At least one user message is required.', 400)
+        throw new AppError("At least one user message is required.", 400);
       }
 
       if (!options.openAiApiKey || !options.openAiClient) {
         return response.json({
           ok: true,
-          reply: 'OPENAI_API_KEY missing on server.',
-        })
+          reply: "OPENAI_API_KEY missing on server.",
+        });
       }
 
-      const client =
-        chatbot.client_id
-          ? await loadClientById(options.supabaseAdminClient, chatbot.client_id)
-          : null
+      const client = chatbot.client_id
+        ? await loadClientById(options.supabaseAdminClient, chatbot.client_id)
+        : null;
 
-      const clientKnowledge = chatbot.client_id && client
-        ? await loadClientKnowledgeText(
-            options.supabaseAdminClient,
-            chatbot.client_id,
-            client.knowledge_base_text,
-          )
-        : ''
+      const clientKnowledge =
+        chatbot.client_id && client
+          ? await loadClientKnowledgeText(
+              options.supabaseAdminClient,
+              chatbot.client_id,
+              client.knowledge_base_text,
+            )
+          : "";
 
       const ragChunks = await retrieveRelevantChunks({
         supabaseAdminClient: options.supabaseAdminClient,
@@ -1418,80 +1595,88 @@ export function createDashboardRouter(options: DashboardRouterOptions): Router {
         chatbotId: chatbot.id,
         queryText: lastUserMessage,
         topK: 8,
-      })
+      });
 
       const ragContext = ragChunks
-        .map((chunk, index) => `Source ${index + 1}: ${chunk.url}\n${chunk.chunkText}`)
-        .join('\n\n')
+        .map(
+          (chunk, index) =>
+            `Source ${index + 1}: ${chunk.url}\n${chunk.chunkText}`,
+        )
+        .join("\n\n");
 
       const strictContextInstruction = [
-        'You are a business assistant.',
-        'Use only the provided context to answer.',
+        "You are a business assistant.",
+        "Use only the provided context to answer.",
         "If the answer is not in the context, say you don't know and suggest contacting the business directly.",
-        'Do not fabricate facts or policies.',
-      ].join(' ')
+        "Do not fabricate facts or policies.",
+      ].join(" ");
 
       const systemPrompt = [
         strictContextInstruction,
         buildSystemPrompt(clientKnowledge),
         ragContext
           ? `Website Context:\n${ragContext}`
-          : 'Website Context:\nNo relevant website context was retrieved.',
-      ].join('\n\n')
+          : "Website Context:\nNo relevant website context was retrieved.",
+      ].join("\n\n");
 
       const completion = await options.openAiClient.chat.completions.create({
         model: options.openAiModel,
         messages: [
-          { role: 'system', content: systemPrompt },
+          { role: "system", content: systemPrompt },
           ...sanitizedMessages.map((message) => ({
             role: message.role,
             content: message.content,
           })),
         ],
         temperature: 0.4,
-      })
+      });
 
-      const reply = completion.choices?.[0]?.message?.content?.trim() || "Sorry - I couldn't generate a response."
+      const reply =
+        completion.choices?.[0]?.message?.content?.trim() ||
+        "Sorry - I couldn't generate a response.";
 
       response.json({
         ok: true,
         reply,
         chatbotId: chatbot.id,
-      })
+      });
     }),
-  )
+  );
 
   router.get(
-    '/leads',
+    "/leads",
     asyncHandler(async (request, response) => {
-      const parsedQuery = dashboardLeadsQuerySchema.safeParse(request.query)
+      const parsedQuery = dashboardLeadsQuerySchema.safeParse(request.query);
       if (!parsedQuery.success) {
-        return respondValidationError(parsedQuery.error, response)
+        return respondValidationError(parsedQuery.error, response);
       }
 
-      const authRequest = asAuthenticatedRequest(request)
+      const authRequest = asAuthenticatedRequest(request);
       const client = await ensureTenantOwnership(
         options.supabaseAdminClient,
         authRequest.user.userId,
         authRequest.user.clientId,
-      )
+      );
 
-      const { limit, offset, status } = parsedQuery.data
+      const { limit, offset, status } = parsedQuery.data;
 
       let query = options.supabaseAdminClient
-        .from('leads')
-        .select('id, client_id, name, email, phone, need, status, source, created_at', { count: 'exact' })
-        .eq('client_id', client.id)
-        .order('created_at', { ascending: false })
-        .range(offset, offset + limit - 1)
+        .from("leads")
+        .select(
+          "id, client_id, name, email, phone, need, status, source, created_at",
+          { count: "exact" },
+        )
+        .eq("client_id", client.id)
+        .order("created_at", { ascending: false })
+        .range(offset, offset + limit - 1);
 
       if (status) {
-        query = query.eq('status', status)
+        query = query.eq("status", status);
       }
 
-      const { data, count, error } = await query.returns<LeadRow[]>()
+      const { data, count, error } = await query.returns<LeadRow[]>();
       if (error) {
-        throw new AppError('Failed to load leads', 500, error)
+        throw new AppError("Failed to load leads", 500, error);
       }
 
       response.json({
@@ -1502,48 +1687,47 @@ export function createDashboardRouter(options: DashboardRouterOptions): Router {
           offset,
           total: count ?? 0,
         },
-      })
+      });
     }),
-  )
+  );
 
   router.patch(
-    '/leads/:id',
+    "/leads/:id",
     asyncHandler(async (request, response) => {
-      const parsed = dashboardLeadStatusSchema.safeParse(request.body)
+      const parsed = dashboardLeadStatusSchema.safeParse(request.body);
       if (!parsed.success) {
-        return respondValidationError(parsed.error, response)
+        return respondValidationError(parsed.error, response);
       }
 
-      const leadId = toSingleParam(request.params.id)
+      const leadId = toSingleParam(request.params.id);
       if (!leadId) {
-        throw new AppError('Lead id is required', 400)
+        throw new AppError("Lead id is required", 400);
       }
 
-      const authRequest = asAuthenticatedRequest(request)
+      const authRequest = asAuthenticatedRequest(request);
       const client = await ensureTenantOwnership(
         options.supabaseAdminClient,
         authRequest.user.userId,
         authRequest.user.clientId,
-      )
+      );
 
       const { data, error } = await options.supabaseAdminClient
-        .from('leads')
+        .from("leads")
         .update({ status: parsed.data.status })
-        .eq('id', leadId)
-        .eq('client_id', client.id)
-        .select('id, client_id, name, email, phone, need, status, source, created_at')
-        .single<LeadRow>()
+        .eq("id", leadId)
+        .eq("client_id", client.id)
+        .select(
+          "id, client_id, name, email, phone, need, status, source, created_at",
+        )
+        .single<LeadRow>();
 
       if (error || !data) {
-        throw new AppError('Failed to update lead', 500, error)
+        throw new AppError("Failed to update lead", 500, error);
       }
 
-      response.json({ ok: true, lead: data })
+      response.json({ ok: true, lead: data });
     }),
-  )
+  );
 
-  return router
+  return router;
 }
-
-
-
