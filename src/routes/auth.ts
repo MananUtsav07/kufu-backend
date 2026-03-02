@@ -249,7 +249,7 @@ export function createAuthRouter(options: AuthRouterOptions): Router {
         supabaseAdminClient: options.supabaseAdminClient,
         email: normalizedEmail,
         passwordHash,
-        businessName: parsed.data.business_name?.trim() || 'Kufu Client',
+        businessName: parsed.data.business_name.trim(),
         websiteUrl: parsed.data.website_url?.trim() || null,
       })
 
@@ -275,7 +275,11 @@ export function createAuthRouter(options: AuthRouterOptions): Router {
         supabaseAdminClient: options.supabaseAdminClient,
         actorUserId: user.id,
         action: 'auth.register',
-        metadata: { email: normalizedEmail },
+        metadata: {
+          email: normalizedEmail,
+          fullName: parsed.data.full_name.trim(),
+          businessName: parsed.data.business_name.trim(),
+        },
       })
 
       return response.status(201).json({

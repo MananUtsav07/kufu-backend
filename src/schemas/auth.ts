@@ -5,7 +5,8 @@ export const registerSchema = z
   .object({
     email: emailSchema,
     password: passwordSchema,
-    business_name: z.string().trim().min(1).max(200).optional(),
+    full_name: z.string().trim().min(1).max(200),
+    business_name: z.string().trim().min(1).max(200),
     website_url: z.string().trim().url().optional().or(z.literal('')),
   })
   .strict()

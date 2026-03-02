@@ -1627,10 +1627,30 @@ export function createDashboardRouter(options: DashboardRouterOptions): Router {
         "If the answer is not in the context, say you don't know and suggest contacting the business directly.",
         "Do not fabricate facts or policies.",
       ].join(" ");
+      const { data: chatbotSettings, error: chatbotSettingsError } =
+        await options.supabaseAdminClient
+          .from("chatbot_settings")
+          .select("bot_name")
+          .eq("chatbot_id", chatbot.id)
+          .maybeSingle<{ bot_name: string }>();
+
+      if (chatbotSettingsError) {
+        throw new AppError(
+          "Failed to load chatbot settings for response prompt",
+          500,
+          chatbotSettingsError,
+        );
+      }
+
+      const assistantName =
+        chatbotSettings?.bot_name?.trim() || chatbot.name;
 
       const systemPrompt = [
         strictContextInstruction,
-        buildSystemPrompt(clientKnowledge),
+        buildSystemPrompt(clientKnowledge, {
+          assistantName,
+          businessName: client?.business_name ?? null,
+        }),
         ragContext
           ? `Website Context:\n${ragContext}`
           : "Website Context:\nNo relevant website context was retrieved.",

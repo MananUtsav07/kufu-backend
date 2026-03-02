@@ -64,6 +64,7 @@ type ChatContext = {
   userId: string | null;
   clientId: string | null;
   chatbotId: string | null;
+  chatbotName: string | null;
   userRole: "user" | "admin";
   plan: PlanRow | null;
   subscription: SubscriptionRow | null;
@@ -147,6 +148,7 @@ async function resolveChatContext(
 
     let chatbotId = providedChatbotId || null;
     let resolvedClientId = authUser.clientId;
+    let resolvedChatbotName: string | null = null;
     if (chatbotId) {
       const chatbot = await loadChatbotById(
         options.supabaseAdminClient,
@@ -156,6 +158,7 @@ async function resolveChatContext(
         throw new AppError("Chatbot not found", 404);
       }
       resolvedClientId = chatbot.client_id ?? authUser.clientId;
+      resolvedChatbotName = chatbot.name;
     }
 
     if (!chatbotId) {
@@ -179,6 +182,7 @@ async function resolveChatContext(
 
       chatbotId = defaultChatbot.id;
       resolvedClientId = defaultClient.id;
+      resolvedChatbotName = defaultChatbot.name;
     }
 
     const usage = await enforcePlanMessageLimit(
@@ -194,6 +198,7 @@ async function resolveChatContext(
       userId: user.id,
       clientId: resolvedClientId,
       chatbotId,
+      chatbotName: resolvedChatbotName,
       userRole: user.role,
       plan: usage.plan,
       subscription: usage.subscription,
@@ -256,6 +261,7 @@ async function resolveChatContext(
       userId: ownerUser.id,
       clientId: chatbot.client_id,
       chatbotId: chatbot.id,
+      chatbotName: chatbot.name,
       userRole: ownerUser.role,
       plan: usage.plan,
       subscription: usage.subscription,
@@ -267,6 +273,7 @@ async function resolveChatContext(
     userId: null,
     clientId: null,
     chatbotId: null,
+    chatbotName: null,
     userRole: "user",
     plan: null,
     subscription: null,
@@ -341,12 +348,14 @@ export function createChatRouter(options: ChatRouterOptions): Router {
         : "";
 
       let clientKnowledge = "";
+      let clientBusinessName: string | null = null;
       if (context.clientId) {
         const client = await loadClientById(
           options.supabaseAdminClient,
           context.clientId,
         );
         if (client) {
+          clientBusinessName = client.business_name;
           clientKnowledge = await loadClientKnowledgeText(
             options.supabaseAdminClient,
             context.clientId,
@@ -392,9 +401,35 @@ export function createChatRouter(options: ChatRouterOptions): Router {
         "Do not fabricate facts or policies.",
       ].join(" ");
 
+      let assistantName = context.chatbotName?.trim() || "AI Assistant";
+      if (context.chatbotId) {
+        const { data: chatbotSettings, error: chatbotSettingsError } =
+          await options.supabaseAdminClient
+            .from("chatbot_settings")
+            .select("bot_name")
+            .eq("chatbot_id", context.chatbotId)
+            .maybeSingle<{ bot_name: string }>();
+
+        if (chatbotSettingsError) {
+          throw new AppError(
+            "Failed to load chatbot settings for response prompt",
+            500,
+            chatbotSettingsError,
+          );
+        }
+
+        const configuredBotName = chatbotSettings?.bot_name?.trim();
+        if (configuredBotName) {
+          assistantName = configuredBotName;
+        }
+      }
+
       const systemPrompt = [
         strictContextInstruction,
-        buildSystemPrompt(mergedKnowledge),
+        buildSystemPrompt(mergedKnowledge, {
+          assistantName,
+          businessName: clientBusinessName,
+        }),
         ragContext
           ? `Website Context:\n${ragContext}`
           : "Website Context:\nNo relevant website context was retrieved.",
