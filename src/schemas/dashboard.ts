@@ -55,8 +55,9 @@ export const dashboardTicketUpdateSchema = z
 
 export const dashboardQuoteCreateSchema = z
   .object({
-    requested_plan: z.enum(['starter', 'pro', 'business']).optional(),
+    requested_plan: z.enum(['starter', 'pro', 'business']).nullable().optional(),
     requested_chatbots: z.coerce.number().int().min(1).max(100).optional(),
+    requested_monthly_messages: z.coerce.number().int().min(1).max(100000000).optional(),
     requested_unlimited_messages: z.boolean().optional().default(false),
     notes: z.string().trim().min(1).max(5000),
   })

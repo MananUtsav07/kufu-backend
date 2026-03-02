@@ -1274,7 +1274,7 @@ export function createDashboardRouter(options: DashboardRouterOptions): Router {
       const { data, error } = await options.supabaseAdminClient
         .from("custom_quotes")
         .select(
-          "id, user_id, requested_plan, requested_chatbots, requested_unlimited_messages, notes, status, admin_response, created_at, updated_at",
+          "id, user_id, requested_plan, requested_chatbots, requested_monthly_messages, requested_unlimited_messages, notes, status, admin_response, created_at, updated_at",
         )
         .eq("user_id", authRequest.user.userId)
         .order("created_at", { ascending: false });
@@ -1322,6 +1322,8 @@ export function createDashboardRouter(options: DashboardRouterOptions): Router {
           .update({
             requested_plan: parsed.data.requested_plan ?? null,
             requested_chatbots: parsed.data.requested_chatbots ?? null,
+            requested_monthly_messages:
+              parsed.data.requested_monthly_messages ?? null,
             requested_unlimited_messages:
               parsed.data.requested_unlimited_messages,
             notes: parsed.data.notes,
@@ -1330,7 +1332,7 @@ export function createDashboardRouter(options: DashboardRouterOptions): Router {
           })
           .eq("id", existingPending.id)
           .select(
-            "id, user_id, requested_plan, requested_chatbots, requested_unlimited_messages, notes, status, admin_response, created_at, updated_at",
+            "id, user_id, requested_plan, requested_chatbots, requested_monthly_messages, requested_unlimited_messages, notes, status, admin_response, created_at, updated_at",
           )
           .single();
 
@@ -1346,6 +1348,8 @@ export function createDashboardRouter(options: DashboardRouterOptions): Router {
             user_id: authRequest.user.userId,
             requested_plan: parsed.data.requested_plan ?? null,
             requested_chatbots: parsed.data.requested_chatbots ?? null,
+            requested_monthly_messages:
+              parsed.data.requested_monthly_messages ?? null,
             requested_unlimited_messages:
               parsed.data.requested_unlimited_messages,
             notes: parsed.data.notes,
@@ -1353,7 +1357,7 @@ export function createDashboardRouter(options: DashboardRouterOptions): Router {
             updated_at: new Date().toISOString(),
           })
           .select(
-            "id, user_id, requested_plan, requested_chatbots, requested_unlimited_messages, notes, status, admin_response, created_at, updated_at",
+            "id, user_id, requested_plan, requested_chatbots, requested_monthly_messages, requested_unlimited_messages, notes, status, admin_response, created_at, updated_at",
           )
           .single();
 

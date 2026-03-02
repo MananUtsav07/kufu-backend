@@ -370,7 +370,7 @@ export function createAdminRouter(options: AdminRouterOptions): Router {
       const { data, error } = await options.supabaseAdminClient
         .from('custom_quotes')
         .select(
-          'id, user_id, requested_plan, requested_chatbots, requested_unlimited_messages, notes, status, admin_response, created_at, updated_at',
+          'id, user_id, requested_plan, requested_chatbots, requested_monthly_messages, requested_unlimited_messages, notes, status, admin_response, created_at, updated_at',
         )
         .order('created_at', { ascending: false })
 
@@ -410,7 +410,7 @@ export function createAdminRouter(options: AdminRouterOptions): Router {
         .update(updatePayload)
         .eq('id', quoteId)
         .select(
-          'id, user_id, requested_plan, requested_chatbots, requested_unlimited_messages, notes, status, admin_response, created_at, updated_at',
+          'id, user_id, requested_plan, requested_chatbots, requested_monthly_messages, requested_unlimited_messages, notes, status, admin_response, created_at, updated_at',
         )
         .single()
 

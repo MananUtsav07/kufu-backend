@@ -10,7 +10,7 @@ import {
   getChatbotSettings,
   upsertChatbotSettings,
 } from '../services/chatbotSettingsService.js'
-import { loadChatbotById } from '../services/tenantService.js'
+import { loadChatbotById, loadUserChatbots } from '../services/tenantService.js'
 
 type ChatbotRouterOptions = {
   jwtSecret: string
@@ -52,6 +52,38 @@ export function createChatbotRouter(options: ChatbotRouterOptions): Router {
   const router = Router()
 
   router.use(authMiddleware(options.jwtSecret))
+
+  router.get(
+    '/user/:userId',
+    asyncHandler(async (request, response) => {
+      const userId = toSingleParam(request.params.userId)
+      if (!userId) {
+        throw new AppError('userId is required', 400)
+      }
+
+      const authRequest = asAuthenticatedRequest(request)
+      const isSelf = authRequest.user.userId === userId
+      const canAccess = authRequest.user.role === 'admin' || isSelf
+
+      if (!canAccess) {
+        throw new AppError('Forbidden', 403)
+      }
+
+      const chatbots = await loadUserChatbots(options.supabaseAdminClient, userId)
+
+      response.json({
+        ok: true,
+        userId,
+        hasChatbot: chatbots.length > 0,
+        chatbotCount: chatbots.length,
+        chatbots: chatbots.map((chatbot) => ({
+          id: chatbot.id,
+          name: chatbot.name,
+          is_active: chatbot.is_active,
+        })),
+      })
+    }),
+  )
 
   router.get(
     '/settings/:chatbotId',

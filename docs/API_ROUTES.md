@@ -421,6 +421,24 @@ Auth: Bearer JWT (user/admin)
 }
 ```
 
+### `GET /api/chatbot/user/:userId`
+- Auth: Bearer JWT
+- Access:
+  - `user` can only query their own `userId`
+  - `admin` can query any user
+- Response:
+```json
+{
+  "ok": true,
+  "userId": "uuid",
+  "hasChatbot": true,
+  "chatbotCount": 2,
+  "chatbots": [
+    { "id": "uuid", "name": "Website Bot", "is_active": true }
+  ]
+}
+```
+
 ### `PUT /api/chatbot/settings/:chatbotId`
 - Auth: user owns chatbot or admin
 - Body:
@@ -480,10 +498,11 @@ Auth: Bearer JWT (user/admin)
 - Body:
 ```json
 {
-  "requested_plan": "pro",
+  "requested_plan": null,
   "requested_chatbots": 3,
+  "requested_monthly_messages": 5000,
   "requested_unlimited_messages": false,
-  "notes": "Need upgrade this month"
+  "notes": "Need WhatsApp + Instagram automation with larger monthly volume."
 }
 ```
 
