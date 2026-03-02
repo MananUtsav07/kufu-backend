@@ -13,6 +13,7 @@ import {
 import { createInMemoryLimiter } from "../lib/rateLimit.js";
 import { sanitizeMessages } from "../lib/sanitizeMessages.js";
 import { buildSystemPrompt } from "../lib/systemPrompt.js";
+import type { createMailer } from "../lib/mailer.js";
 import { retrieveRelevantChunks } from "../rag/retrieval.js";
 import { chatSchema, chatLogSchema } from "../schemas/api.js";
 import {
@@ -28,6 +29,15 @@ import {
   type PlanRow,
   type SubscriptionRow,
 } from "../services/subscriptionService.js";
+import {
+  insertChatHistoryRow,
+  isFirstLeadCaptureForVisitorSession,
+  isFirstVisitorSessionMessage,
+} from "../services/chatHistoryService.js";
+import {
+  notifyClientOnLeadCapture,
+  notifyClientOnNewChat,
+} from "../services/clientNotificationService.js";
 import {
   extractDomainFromRequestOrigin,
   ensureDefaultChatbot,
@@ -46,6 +56,7 @@ type ChatRouterOptions = {
   openAiClient: OpenAI | null;
   supabaseAdminClient: SupabaseClient;
   dataStore: DataStore;
+  mailer: ReturnType<typeof createMailer>;
 };
 
 type ChatContext = {
@@ -435,12 +446,89 @@ export function createChatRouter(options: ChatRouterOptions): Router {
         }
       }
 
+      let leadCaptured = false;
       if (context.clientId) {
-        await upsertLeadFromMessage(options.supabaseAdminClient, {
+        leadCaptured = await upsertLeadFromMessage(options.supabaseAdminClient, {
           clientId: context.clientId,
           content: lastUserMessage,
           sessionId,
         });
+      }
+
+      if (context.mode === "widget" && context.chatbotId) {
+        const shouldNotifyNewChat = await isFirstVisitorSessionMessage({
+          supabaseAdminClient: options.supabaseAdminClient,
+          chatbotId: context.chatbotId,
+          visitorId: sessionId,
+        });
+
+        const shouldNotifyLeadCapture =
+          leadCaptured
+            ? await isFirstLeadCaptureForVisitorSession({
+                supabaseAdminClient: options.supabaseAdminClient,
+                chatbotId: context.chatbotId,
+                visitorId: sessionId,
+              })
+            : false;
+
+        await insertChatHistoryRow({
+          supabaseAdminClient: options.supabaseAdminClient,
+          chatbotId: context.chatbotId,
+          visitorId: sessionId,
+          userMessage: lastUserMessage,
+          botResponse: reply,
+          leadCaptured,
+        });
+
+        if (shouldNotifyNewChat) {
+          try {
+            await notifyClientOnNewChat({
+              supabaseAdminClient: options.supabaseAdminClient,
+              mailer: options.mailer,
+              chatbotId: context.chatbotId,
+              visitorId: sessionId,
+              userMessage: lastUserMessage,
+            });
+          } catch (notificationError) {
+            console.error(
+              JSON.stringify({
+                level: "error",
+                type: "new_chat_notification_failed",
+                path: "/api/chat",
+                chatbotId: context.chatbotId,
+                message:
+                  notificationError instanceof Error
+                    ? notificationError.message
+                    : "Unknown notification error",
+              }),
+            );
+          }
+        }
+
+        if (leadCaptured && shouldNotifyLeadCapture) {
+          try {
+            await notifyClientOnLeadCapture({
+              supabaseAdminClient: options.supabaseAdminClient,
+              mailer: options.mailer,
+              chatbotId: context.chatbotId,
+              visitorId: sessionId,
+              userMessage: lastUserMessage,
+            });
+          } catch (notificationError) {
+            console.error(
+              JSON.stringify({
+                level: "error",
+                type: "lead_capture_notification_failed",
+                path: "/api/chat",
+                chatbotId: context.chatbotId,
+                message:
+                  notificationError instanceof Error
+                    ? notificationError.message
+                    : "Unknown notification error",
+              }),
+            );
+          }
+        }
       }
 
       await options.dataStore.appendJsonLine("chats_ai.jsonl", {

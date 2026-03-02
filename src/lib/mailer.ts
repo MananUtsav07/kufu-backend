@@ -32,6 +32,24 @@ type ContactLeadNotificationPayload = {
   message: string
 }
 
+type ClientNewChatNotificationPayload = {
+  to: string
+  submittedAtIso: string
+  chatbotName: string
+  businessName: string
+  visitorId: string
+  firstMessage: string
+}
+
+type ClientLeadCaptureNotificationPayload = {
+  to: string
+  submittedAtIso: string
+  chatbotName: string
+  businessName: string
+  visitorId: string
+  leadMessage: string
+}
+
 export function createMailer(options: MailerOptions) {
   const { brevoApiKey, emailFrom } = options
 
@@ -159,6 +177,92 @@ export function createMailer(options: MailerOptions) {
             `Name: ${fullName || '-'}`,
             `Email: ${email}`,
             `Message: ${message || '-'}`,
+          ].join('\n'),
+        },
+        {
+          headers: {
+            'api-key': brevoApiKey,
+            'Content-Type': 'application/json',
+          },
+        },
+      )
+    },
+    async sendClientNewChatNotification(payload: ClientNewChatNotificationPayload): Promise<void> {
+      const { to, submittedAtIso, chatbotName, businessName, visitorId, firstMessage } = payload
+
+      const html = `
+        <div style="font-family: Inter, Arial, sans-serif; max-width: 640px; margin: 0 auto; color: #0f172a;">
+          <h2 style="margin-bottom: 12px;">New Chat Started</h2>
+          <p style="margin-bottom: 16px; color: #334155;">A new visitor started a chat with your bot.</p>
+          <table style="border-collapse: collapse; width: 100%; font-size: 14px;">
+            <tbody>
+              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Submitted At</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${submittedAtIso}</td></tr>
+              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Business</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${businessName}</td></tr>
+              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Chatbot</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${chatbotName}</td></tr>
+              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Visitor Session</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${visitorId}</td></tr>
+              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">First Message</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${firstMessage}</td></tr>
+            </tbody>
+          </table>
+        </div>
+      `
+
+      await axios.post(
+        'https://api.brevo.com/v3/smtp/email',
+        {
+          sender: { name: 'Kufu', email: emailFrom },
+          to: [{ email: to }],
+          subject: 'New Chat Started - Kufu',
+          htmlContent: html,
+          textContent: [
+            'New Chat Started',
+            `Submitted At: ${submittedAtIso}`,
+            `Business: ${businessName}`,
+            `Chatbot: ${chatbotName}`,
+            `Visitor Session: ${visitorId}`,
+            `First Message: ${firstMessage}`,
+          ].join('\n'),
+        },
+        {
+          headers: {
+            'api-key': brevoApiKey,
+            'Content-Type': 'application/json',
+          },
+        },
+      )
+    },
+    async sendClientLeadCaptureNotification(payload: ClientLeadCaptureNotificationPayload): Promise<void> {
+      const { to, submittedAtIso, chatbotName, businessName, visitorId, leadMessage } = payload
+
+      const html = `
+        <div style="font-family: Inter, Arial, sans-serif; max-width: 640px; margin: 0 auto; color: #0f172a;">
+          <h2 style="margin-bottom: 12px;">Lead Captured From Chat</h2>
+          <p style="margin-bottom: 16px; color: #334155;">A visitor message triggered lead capture in your chatbot.</p>
+          <table style="border-collapse: collapse; width: 100%; font-size: 14px;">
+            <tbody>
+              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Submitted At</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${submittedAtIso}</td></tr>
+              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Business</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${businessName}</td></tr>
+              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Chatbot</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${chatbotName}</td></tr>
+              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Visitor Session</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${visitorId}</td></tr>
+              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Lead Message</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${leadMessage}</td></tr>
+            </tbody>
+          </table>
+        </div>
+      `
+
+      await axios.post(
+        'https://api.brevo.com/v3/smtp/email',
+        {
+          sender: { name: 'Kufu', email: emailFrom },
+          to: [{ email: to }],
+          subject: 'Lead Captured - Kufu',
+          htmlContent: html,
+          textContent: [
+            'Lead Captured From Chat',
+            `Submitted At: ${submittedAtIso}`,
+            `Business: ${businessName}`,
+            `Chatbot: ${chatbotName}`,
+            `Visitor Session: ${visitorId}`,
+            `Lead Message: ${leadMessage}`,
           ].join('\n'),
         },
         {

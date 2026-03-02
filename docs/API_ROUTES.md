@@ -317,6 +317,133 @@ Auth: Bearer JWT (user/admin)
 }
 ```
 
+### `GET /api/dashboard/chat-history/:chatbotId`
+- Plan gate: `starter/pro/business` (admin bypass)
+- Query params:
+  - `from` (ISO datetime, optional)
+  - `to` (ISO datetime, optional)
+  - `leadCaptured` (`yes|no`, optional)
+  - `limit` (default `50`, max `200`)
+  - `offset` (default `0`)
+- Response:
+```json
+{
+  "ok": true,
+  "rows": [
+    {
+      "id": "uuid",
+      "chatbot_id": "uuid",
+      "visitor_id": "widget-session-id",
+      "user_message": "What are your pricing plans?",
+      "bot_response": "We offer Starter, Pro, and Business tiers...",
+      "lead_captured": true,
+      "created_at": "2026-03-02T12:00:00.000Z"
+    }
+  ],
+  "pagination": {
+    "limit": 50,
+    "offset": 0,
+    "total": 1
+  }
+}
+```
+- If blocked by plan:
+```json
+{ "ok": false, "error": "Access Denied" }
+```
+
+### `GET /api/dashboard/chat-history/search`
+- Plan gate: `starter/pro/business` (admin bypass)
+- Query params:
+  - `chatbotId` (required)
+  - `q` (required)
+  - `from`, `to`, `leadCaptured`, `limit`, `offset` (optional)
+- Response shape is the same as `GET /api/dashboard/chat-history/:chatbotId`.
+
+### `GET /api/dashboard/analytics/:chatbotId`
+- Plan gate: `pro/business` (admin bypass)
+- Query params:
+  - `from` (ISO datetime, optional)
+  - `to` (ISO datetime, optional)
+- Response:
+```json
+{
+  "ok": true,
+  "totalChats": 24,
+  "popularQuestions": [
+    { "question": "What are your plans?", "count": 8 },
+    { "question": "Can you integrate WhatsApp?", "count": 5 }
+  ],
+  "peakHours": [
+    { "hour": 10, "count": 3 },
+    { "hour": 15, "count": 6 }
+  ]
+}
+```
+- If blocked by plan:
+```json
+{ "ok": false, "error": "Access Denied" }
+```
+
+### `POST /api/dashboard/test-chat/:chatbotId`
+- Uses tenant knowledge + retrieval for quick in-dashboard testing.
+- Does **not** increment subscription usage.
+- Body:
+```json
+{
+  "sessionId": "dashboard-test-1",
+  "messages": [
+    { "role": "user", "content": "How does your setup work?" }
+  ]
+}
+```
+- Response:
+```json
+{
+  "ok": true,
+  "reply": "We start with a 7-day pilot and configure your channels...",
+  "chatbotId": "uuid"
+}
+```
+
+### `GET /api/chatbot/settings/:chatbotId`
+- Auth: user owns chatbot or admin
+- Response:
+```json
+{
+  "ok": true,
+  "settings": {
+    "chatbot_id": "uuid",
+    "bot_name": "Website Assistant",
+    "greeting_message": "Hi, welcome. How can we help today?",
+    "primary_color": "#6366f1"
+  }
+}
+```
+
+### `PUT /api/chatbot/settings/:chatbotId`
+- Auth: user owns chatbot or admin
+- Body:
+```json
+{
+  "bot_name": "Kufu Assistant",
+  "greeting_message": "Hi there, how can I help?",
+  "primary_color": "#4f46e5"
+}
+```
+- Response:
+```json
+{
+  "ok": true,
+  "settings": {
+    "chatbot_id": "uuid",
+    "bot_name": "Kufu Assistant",
+    "greeting_message": "Hi there, how can I help?",
+    "primary_color": "#4f46e5"
+  }
+}
+```
+
 ### `GET /api/dashboard/knowledge`
 
 ### `POST /api/dashboard/knowledge`

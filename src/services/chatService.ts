@@ -113,14 +113,14 @@ function normalizePhone(value: string): string {
 export async function upsertLeadFromMessage(
   supabaseAdminClient: SupabaseClient,
   input: LeadCaptureInput,
-): Promise<void> {
+): Promise<boolean> {
   const email = input.content.match(emailRegex)?.[0] ?? null
   const phoneRaw = input.content.match(phoneRegex)?.[0] ?? null
   const phone = phoneRaw ? normalizePhone(phoneRaw) : null
   const hasDemoIntent = demoIntentRegex.test(input.content)
 
   if (!email && !phone && !hasDemoIntent) {
-    return
+    return false
   }
 
   let existingLeadId: string | null = null
@@ -170,7 +170,7 @@ export async function upsertLeadFromMessage(
       throw new AppError(`Failed to update lead from chat: ${error.message}`, 500)
     }
 
-    return
+    return true
   }
 
   const { error } = await supabaseAdminClient.from('leads').insert({
@@ -185,4 +185,6 @@ export async function upsertLeadFromMessage(
   if (error) {
     throw new AppError(`Failed to insert lead from chat: ${error.message}`, 500)
   }
+
+  return true
 }

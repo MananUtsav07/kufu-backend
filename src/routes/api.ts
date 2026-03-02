@@ -8,6 +8,7 @@ import type { DataStore } from "../lib/dataStore.js";
 import { createMailer } from "../lib/mailer.js";
 import { createAdminRouter } from "./admin.js";
 import { createAuthRouter } from "./auth.js";
+import { createChatbotRouter } from "./chatbot.js";
 import { createChatRouter } from "./chat.js";
 import { createDashboardRouter } from "./dashboard.js";
 import { createRagRouter } from "./rag.js";
@@ -78,6 +79,17 @@ export function createApiRouter(options: ApiRouterOptions): Router {
       jwtSecret: options.jwtSecret,
       supabaseAdminClient: options.supabaseAdminClient,
       backendBaseUrl: options.backendBaseUrl,
+      openAiApiKey: options.openAiApiKey,
+      openAiModel: options.openAiModel,
+      openAiClient: options.openAiClient,
+    }),
+  );
+
+  router.use(
+    "/chatbot",
+    createChatbotRouter({
+      jwtSecret: options.jwtSecret,
+      supabaseAdminClient: options.supabaseAdminClient,
     }),
   );
 
@@ -116,6 +128,7 @@ export function createApiRouter(options: ApiRouterOptions): Router {
       openAiClient: options.openAiClient,
       supabaseAdminClient: options.supabaseAdminClient,
       dataStore: options.dataStore,
+      mailer,
     }),
   );
 

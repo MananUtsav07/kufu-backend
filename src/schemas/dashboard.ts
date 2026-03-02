@@ -73,3 +73,53 @@ export const dashboardLeadStatusSchema = z
     status: z.string().trim().min(1).max(50),
   })
   .strict()
+
+export const dashboardChatHistoryQuerySchema = z
+  .object({
+    from: z.string().datetime().optional(),
+    to: z.string().datetime().optional(),
+    leadCaptured: z
+      .union([z.literal('yes'), z.literal('no')])
+      .optional(),
+    limit: z.coerce.number().int().min(1).max(200).default(50),
+    offset: z.coerce.number().int().min(0).default(0),
+  })
+  .strict()
+
+export const dashboardChatHistorySearchQuerySchema = z
+  .object({
+    chatbotId: z.string().uuid(),
+    q: z.string().trim().min(1).max(500),
+    from: z.string().datetime().optional(),
+    to: z.string().datetime().optional(),
+    leadCaptured: z
+      .union([z.literal('yes'), z.literal('no')])
+      .optional(),
+    limit: z.coerce.number().int().min(1).max(200).default(50),
+    offset: z.coerce.number().int().min(0).default(0),
+  })
+  .strict()
+
+export const dashboardAnalyticsQuerySchema = z
+  .object({
+    from: z.string().datetime().optional(),
+    to: z.string().datetime().optional(),
+  })
+  .strict()
+
+export const dashboardTestChatSchema = z
+  .object({
+    sessionId: z.string().trim().max(120).optional(),
+    messages: z
+      .array(
+        z
+          .object({
+            role: z.enum(['user', 'assistant']),
+            content: z.string().trim().min(1).max(4000),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(12),
+  })
+  .strict()

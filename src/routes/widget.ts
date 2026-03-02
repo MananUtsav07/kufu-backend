@@ -59,6 +59,22 @@ export function createWidgetApiRouter(options: WidgetRouterOptions): Router {
         ? await loadClientById(options.supabaseAdminClient, chatbot.client_id)
         : null
 
+      const { data: chatbotSettings, error: chatbotSettingsError } = await options.supabaseAdminClient
+        .from('chatbot_settings')
+        .select('bot_name, greeting_message, primary_color')
+        .eq('chatbot_id', chatbot.id)
+        .maybeSingle<{ bot_name: string; greeting_message: string; primary_color: string }>()
+
+      if (chatbotSettingsError) {
+        throw new AppError('Failed to load chatbot settings for widget', 500, chatbotSettingsError)
+      }
+
+      const botName = chatbotSettings?.bot_name?.trim() || chatbot.name
+      const greetingMessage =
+        chatbotSettings?.greeting_message?.trim() ||
+        `Hi, welcome to ${client?.business_name ?? 'Kufu'}. How can we help you today?`
+      const primaryColor = chatbotSettings?.primary_color?.trim() || '#6366f1'
+
       const logoUrl = await createSignedStorageUrl({
         supabaseAdminClient: options.supabaseAdminClient,
         bucket: LOGO_BUCKET,
@@ -72,10 +88,11 @@ export function createWidgetApiRouter(options: WidgetRouterOptions): Router {
           chatbot_id: chatbot.id,
           client_id: chatbot.client_id,
           widget_public_key: chatbot.widget_public_key,
-          name: chatbot.name,
+          name: botName,
           business_name: client?.business_name ?? 'Kufu',
           theme: 'dark',
-          greeting: `Hi, welcome to ${client?.business_name ?? 'Kufu'}. How can we help you today?`,
+          greeting: greetingMessage,
+          primary_color: primaryColor,
           logo_url: logoUrl,
           allowed_domains: getSafeDomainList(chatbot),
         },

@@ -1,12 +1,19 @@
 import { Router } from 'express'
 import type { SupabaseClient } from '@supabase/supabase-js'
+import type OpenAI from 'openai'
 import multer from 'multer'
 
 import { authMiddleware, type AuthenticatedRequest } from '../lib/auth-middleware.js'
 import { asyncHandler, AppError } from '../lib/errors.js'
 import { respondValidationError } from '../lib/http.js'
+import { sanitizeMessages } from '../lib/sanitizeMessages.js'
+import { buildSystemPrompt } from '../lib/systemPrompt.js'
+import { retrieveRelevantChunks } from '../rag/retrieval.js'
 import {
+  dashboardAnalyticsQuerySchema,
   dashboardChatbotCreateSchema,
+  dashboardChatHistoryQuerySchema,
+  dashboardChatHistorySearchQuerySchema,
   dashboardChatbotUpdateSchema,
   dashboardKnowledgeSchema,
   dashboardLeadStatusSchema,
@@ -14,27 +21,33 @@ import {
   dashboardProfileSchema,
   dashboardQuoteCreateSchema,
   dashboardSummaryQuerySchema,
+  dashboardTestChatSchema,
   dashboardTicketCreateSchema,
   dashboardTicketUpdateSchema,
 } from '../schemas/dashboard.js'
 import { writeAuditLog } from '../services/auditService.js'
+import { computeChatAnalytics } from '../services/analyticsService.js'
+import { listChatHistory, searchChatHistory } from '../services/chatHistoryService.js'
 import {
   ensureClientForUser,
   ensureDefaultChatbot,
   ensureTenantOwnership,
   loadChatbotById,
+  loadClientById,
   loadUserById,
   loadUserChatbots,
   buildAllowedDomains,
   createWidgetPublicKey,
 } from '../services/tenantService.js'
 import {
+  isStarterPlusPlan,
   ensureSubscription,
   enforcePlanMessageLimit,
   getUserPlanContext,
   loadPlanByCode,
   resolveChatbotLimitForPlan,
 } from '../services/subscriptionService.js'
+import { loadClientKnowledgeText } from '../services/chatService.js'
 import {
   buildKbStoragePath,
   buildLogoStoragePath,
@@ -50,6 +63,9 @@ type DashboardRouterOptions = {
   jwtSecret: string
   supabaseAdminClient: SupabaseClient
   backendBaseUrl: string
+  openAiApiKey: string
+  openAiModel: string
+  openAiClient: OpenAI | null
 }
 
 type LeadRow = {
@@ -144,6 +160,46 @@ function assertStarterPlusUploadAccess(params: {
   if (!starterPlusPlans.has(params.planCode)) {
     throw new AppError('Upgrade required', 403)
   }
+}
+
+function toBooleanLeadFilter(value: 'yes' | 'no' | undefined): boolean | undefined {
+  if (value === 'yes') {
+    return true
+  }
+  if (value === 'no') {
+    return false
+  }
+  return undefined
+}
+
+function assertProOrBusinessAccess(params: {
+  role: AuthenticatedRequest['user']['role']
+  planCode: string
+}) {
+  if (params.role === 'admin') {
+    return
+  }
+
+  if (params.planCode !== 'pro' && params.planCode !== 'business') {
+    throw new AppError('Access Denied', 403)
+  }
+}
+
+async function loadAuthorizedChatbot(args: {
+  supabaseAdminClient: SupabaseClient
+  chatbotId: string
+  userId: string
+  role: AuthenticatedRequest['user']['role']
+}) {
+  const chatbot = await loadChatbotById(args.supabaseAdminClient, args.chatbotId)
+  const isOwner = chatbot?.user_id === args.userId
+  const canAccess = args.role === 'admin' || isOwner
+
+  if (!chatbot || !canAccess) {
+    throw new AppError('Chatbot not found', 404)
+  }
+
+  return chatbot
 }
 
 export function createDashboardRouter(options: DashboardRouterOptions): Router {
@@ -1147,6 +1203,261 @@ export function createDashboardRouter(options: DashboardRouterOptions): Router {
       })
 
       response.status(201).json({ ok: true, quote: quoteResponse })
+    }),
+  )
+
+  router.get(
+    '/chat-history/:chatbotId([0-9a-fA-F-]{36})',
+    asyncHandler(async (request, response) => {
+      const chatbotId = toSingleParam(request.params.chatbotId)
+      if (!chatbotId) {
+        throw new AppError('chatbotId is required', 400)
+      }
+
+      const parsedQuery = dashboardChatHistoryQuerySchema.safeParse(request.query)
+      if (!parsedQuery.success) {
+        return respondValidationError(parsedQuery.error, response)
+      }
+
+      const authRequest = asAuthenticatedRequest(request)
+      await loadAuthorizedChatbot({
+        supabaseAdminClient: options.supabaseAdminClient,
+        chatbotId,
+        userId: authRequest.user.userId,
+        role: authRequest.user.role,
+      })
+
+      if (authRequest.user.role !== 'admin') {
+        const planContext = await getUserPlanContext(
+          options.supabaseAdminClient,
+          authRequest.user.userId,
+          authRequest.user.role,
+        )
+        if (!isStarterPlusPlan(planContext.planCode, authRequest.user.role)) {
+          throw new AppError('Access Denied', 403)
+        }
+      }
+
+      const history = await listChatHistory({
+        supabaseAdminClient: options.supabaseAdminClient,
+        chatbotId,
+        from: parsedQuery.data.from,
+        to: parsedQuery.data.to,
+        leadCaptured: toBooleanLeadFilter(parsedQuery.data.leadCaptured),
+        limit: parsedQuery.data.limit,
+        offset: parsedQuery.data.offset,
+      })
+
+      response.json({
+        ok: true,
+        rows: history.rows,
+        pagination: {
+          limit: parsedQuery.data.limit,
+          offset: parsedQuery.data.offset,
+          total: history.total,
+        },
+      })
+    }),
+  )
+
+  router.get(
+    '/chat-history/search',
+    asyncHandler(async (request, response) => {
+      const parsedQuery = dashboardChatHistorySearchQuerySchema.safeParse(request.query)
+      if (!parsedQuery.success) {
+        return respondValidationError(parsedQuery.error, response)
+      }
+
+      const authRequest = asAuthenticatedRequest(request)
+      await loadAuthorizedChatbot({
+        supabaseAdminClient: options.supabaseAdminClient,
+        chatbotId: parsedQuery.data.chatbotId,
+        userId: authRequest.user.userId,
+        role: authRequest.user.role,
+      })
+
+      if (authRequest.user.role !== 'admin') {
+        const planContext = await getUserPlanContext(
+          options.supabaseAdminClient,
+          authRequest.user.userId,
+          authRequest.user.role,
+        )
+        if (!isStarterPlusPlan(planContext.planCode, authRequest.user.role)) {
+          throw new AppError('Access Denied', 403)
+        }
+      }
+
+      const history = await searchChatHistory({
+        supabaseAdminClient: options.supabaseAdminClient,
+        chatbotId: parsedQuery.data.chatbotId,
+        queryText: parsedQuery.data.q,
+        from: parsedQuery.data.from,
+        to: parsedQuery.data.to,
+        leadCaptured: toBooleanLeadFilter(parsedQuery.data.leadCaptured),
+        limit: parsedQuery.data.limit,
+        offset: parsedQuery.data.offset,
+      })
+
+      response.json({
+        ok: true,
+        rows: history.rows,
+        pagination: {
+          limit: parsedQuery.data.limit,
+          offset: parsedQuery.data.offset,
+          total: history.total,
+        },
+      })
+    }),
+  )
+
+  router.get(
+    '/analytics/:chatbotId',
+    asyncHandler(async (request, response) => {
+      const chatbotId = toSingleParam(request.params.chatbotId)
+      if (!chatbotId) {
+        throw new AppError('chatbotId is required', 400)
+      }
+
+      const parsedQuery = dashboardAnalyticsQuerySchema.safeParse(request.query)
+      if (!parsedQuery.success) {
+        return respondValidationError(parsedQuery.error, response)
+      }
+
+      const authRequest = asAuthenticatedRequest(request)
+      await loadAuthorizedChatbot({
+        supabaseAdminClient: options.supabaseAdminClient,
+        chatbotId,
+        userId: authRequest.user.userId,
+        role: authRequest.user.role,
+      })
+
+      if (authRequest.user.role !== 'admin') {
+        const planContext = await getUserPlanContext(
+          options.supabaseAdminClient,
+          authRequest.user.userId,
+          authRequest.user.role,
+        )
+        assertProOrBusinessAccess({
+          role: authRequest.user.role,
+          planCode: planContext.planCode,
+        })
+      }
+
+      const analytics = await computeChatAnalytics({
+        supabaseAdminClient: options.supabaseAdminClient,
+        chatbotId,
+        from: parsedQuery.data.from,
+        to: parsedQuery.data.to,
+      })
+
+      response.json({
+        ok: true,
+        ...analytics,
+      })
+    }),
+  )
+
+  router.post(
+    '/test-chat/:chatbotId',
+    asyncHandler(async (request, response) => {
+      const chatbotId = toSingleParam(request.params.chatbotId)
+      if (!chatbotId) {
+        throw new AppError('chatbotId is required', 400)
+      }
+
+      const parsedBody = dashboardTestChatSchema.safeParse(request.body)
+      if (!parsedBody.success) {
+        return respondValidationError(parsedBody.error, response)
+      }
+
+      const authRequest = asAuthenticatedRequest(request)
+      const chatbot = await loadAuthorizedChatbot({
+        supabaseAdminClient: options.supabaseAdminClient,
+        chatbotId,
+        userId: authRequest.user.userId,
+        role: authRequest.user.role,
+      })
+
+      const sanitizedMessages = sanitizeMessages(parsedBody.data.messages, 12)
+      if (sanitizedMessages.length === 0) {
+        throw new AppError('No valid messages provided.', 400)
+      }
+
+      const lastUserMessage = [...sanitizedMessages]
+        .reverse()
+        .find((message) => message.role === 'user')
+        ?.content
+
+      if (!lastUserMessage) {
+        throw new AppError('At least one user message is required.', 400)
+      }
+
+      if (!options.openAiApiKey || !options.openAiClient) {
+        return response.json({
+          ok: true,
+          reply: 'OPENAI_API_KEY missing on server.',
+        })
+      }
+
+      const client =
+        chatbot.client_id
+          ? await loadClientById(options.supabaseAdminClient, chatbot.client_id)
+          : null
+
+      const clientKnowledge = chatbot.client_id && client
+        ? await loadClientKnowledgeText(
+            options.supabaseAdminClient,
+            chatbot.client_id,
+            client.knowledge_base_text,
+          )
+        : ''
+
+      const ragChunks = await retrieveRelevantChunks({
+        supabaseAdminClient: options.supabaseAdminClient,
+        openAiClient: options.openAiClient,
+        chatbotId: chatbot.id,
+        queryText: lastUserMessage,
+        topK: 8,
+      })
+
+      const ragContext = ragChunks
+        .map((chunk, index) => `Source ${index + 1}: ${chunk.url}\n${chunk.chunkText}`)
+        .join('\n\n')
+
+      const strictContextInstruction = [
+        'You are a business assistant.',
+        'Use only the provided context to answer.',
+        "If the answer is not in the context, say you don't know and suggest contacting the business directly.",
+        'Do not fabricate facts or policies.',
+      ].join(' ')
+
+      const systemPrompt = [
+        strictContextInstruction,
+        buildSystemPrompt(clientKnowledge),
+        ragContext
+          ? `Website Context:\n${ragContext}`
+          : 'Website Context:\nNo relevant website context was retrieved.',
+      ].join('\n\n')
+
+      const completion = await options.openAiClient.chat.completions.create({
+        model: options.openAiModel,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          ...sanitizedMessages.map((message) => ({
+            role: message.role,
+            content: message.content,
+          })),
+        ],
+        temperature: 0.4,
+      })
+
+      const reply = completion.choices?.[0]?.message?.content?.trim() || "Sorry - I couldn't generate a response."
+
+      response.json({
+        ok: true,
+        reply,
+        chatbotId: chatbot.id,
+      })
     }),
   )
 
