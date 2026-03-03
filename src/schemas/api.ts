@@ -77,6 +77,10 @@ export const ragIngestStatusQuerySchema = z.object({
   runId: z.string().uuid(),
 })
 
+export const ragIngestLatestQuerySchema = z.object({
+  chatbotId: z.string().uuid(),
+})
+
 export const ragIngestCancelSchema = z
   .object({
     runId: z.string().uuid(),

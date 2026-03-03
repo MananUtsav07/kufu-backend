@@ -302,17 +302,17 @@ export async function setSubscriptionPlan(
   planCode: string,
 ): Promise<SubscriptionRow> {
   await loadPlanByCode(supabaseAdminClient, planCode)
-  const currentSubscription = await ensureSubscription(supabaseAdminClient, userId)
-  const nextPeriod = createPeriodWindow(new Date())
+  const existingSubscription = await ensureSubscription(supabaseAdminClient, userId)
+  const currentSubscription = await rollSubscriptionPeriodIfNeeded(
+    supabaseAdminClient,
+    existingSubscription,
+  )
 
   const { data: updatedSubscription, error: updateError } = await supabaseAdminClient
     .from('subscriptions')
     .update({
       plan_code: planCode,
       status: DEFAULT_SUBSCRIPTION_STATUS,
-      current_period_start: nextPeriod.start,
-      current_period_end: nextPeriod.end,
-      message_count_in_period: 0,
       updated_at: new Date().toISOString(),
     })
     .eq('id', currentSubscription.id)

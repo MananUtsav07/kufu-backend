@@ -104,6 +104,25 @@ export async function getIngestionRunById(
   return data ?? null
 }
 
+export async function getLatestIngestionForChatbot(
+  supabaseAdminClient: SupabaseClient,
+  chatbotId: string,
+): Promise<RagIngestionRunRow | null> {
+  const { data, error } = await supabaseAdminClient
+    .from('rag_ingestion_runs')
+    .select('id, chatbot_id, started_at, finished_at, status, pages_found, pages_crawled, chunks_written, error, cancel_requested, updated_at, website_url, max_pages')
+    .eq('chatbot_id', chatbotId)
+    .order('started_at', { ascending: false })
+    .limit(1)
+    .maybeSingle<RagIngestionRunRow>()
+
+  if (error) {
+    throw new AppError(`Failed to load latest ingestion run: ${error.message}`, 500)
+  }
+
+  return data ?? null
+}
+
 export async function updateIngestionRun(
   supabaseAdminClient: SupabaseClient,
   runId: string,

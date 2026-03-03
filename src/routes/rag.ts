@@ -7,12 +7,13 @@ import { asyncHandler, AppError } from '../lib/errors.js'
 import { respondValidationError } from '../lib/http.js'
 import {
   ragIngestCancelSchema,
+  ragIngestLatestQuerySchema,
   ragIngestResyncSchema,
   ragIngestStartSchema,
   ragIngestStatusQuerySchema,
 } from '../schemas/api.js'
 import { createRagIngestionManager } from '../rag/ingestionManager.js'
-import { getIngestionRunById } from '../rag/store.js'
+import { getIngestionRunById, getLatestIngestionForChatbot } from '../rag/store.js'
 import { loadChatbotById, loadUserById } from '../services/tenantService.js'
 
 type RagRouterOptions = {
@@ -134,6 +135,61 @@ export function createRagRouter(options: RagRouterOptions): Router {
         ok: true,
         runId: started.runId,
         status: 'running',
+      })
+    }),
+  )
+
+  router.get(
+    '/ingest/latest',
+    asyncHandler(async (request, response) => {
+      const parsed = ragIngestLatestQuerySchema.safeParse({
+        chatbotId: request.query.chatbotId,
+      })
+      if (!parsed.success) {
+        return respondValidationError(parsed.error, response)
+      }
+
+      const authRequest = getAuthRequest(request)
+      const user = await loadUserById(options.supabaseAdminClient, authRequest.user.userId)
+      if (!user) {
+        throw new AppError('Unauthorized', 401)
+      }
+
+      await ensureChatbotAccess(options.supabaseAdminClient, {
+        userId: user.id,
+        role: user.role,
+        chatbotId: parsed.data.chatbotId,
+      })
+
+      const run = await getLatestIngestionForChatbot(options.supabaseAdminClient, parsed.data.chatbotId)
+      if (!run) {
+        response.json({
+          ok: true,
+          run: null,
+        })
+        return
+      }
+
+      const manager = options.openAiClient
+        ? createRagIngestionManager(options.supabaseAdminClient, options.openAiClient)
+        : null
+      const status = manager ? await manager.getStatus(run.id) : null
+
+      response.json({
+        ok: true,
+        run: status ?? {
+          runId: run.id,
+          chatbotId: run.chatbot_id,
+          status: run.status,
+          pagesFound: run.pages_found,
+          pagesCrawled: run.pages_crawled,
+          chunksWritten: run.chunks_written,
+          error: run.error,
+          cancelRequested: run.cancel_requested,
+          startedAt: run.started_at,
+          finishedAt: run.finished_at,
+          updatedAt: run.updated_at,
+        },
       })
     }),
   )
