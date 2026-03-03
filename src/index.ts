@@ -24,6 +24,8 @@ import {
   backendBaseUrl,
   corsOrigins,
   dataDir,
+  defaultWidgetLogoPath,
+  defaultWidgetLogoUrl,
   devBypassEmailVerify,
   brevoApiKey,
   contactLeadNotifyEmail,
@@ -77,6 +79,8 @@ app.use(
     contactLeadNotifyEmail,
     demoLeadNotifyEmail,
     emailFrom,
+    defaultWidgetLogoPath,
+    defaultWidgetLogoUrl,
     dataStore,
     allowDevBypassEmailVerify: devBypassEmailVerify,
   }),
@@ -89,6 +93,8 @@ if (supabaseAdminClient) {
       supabaseAdminClient,
       frontendUrl,
       backendBaseUrl,
+      defaultWidgetLogoPath,
+      defaultWidgetLogoUrl,
     }),
   );
 }

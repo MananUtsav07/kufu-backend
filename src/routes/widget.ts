@@ -11,6 +11,8 @@ type WidgetRouterOptions = {
   supabaseAdminClient: SupabaseClient
   frontendUrl: string
   backendBaseUrl: string
+  defaultWidgetLogoPath?: string
+  defaultWidgetLogoUrl?: string
 }
 
 function trimTrailingSlash(value: string): string {
@@ -35,6 +37,58 @@ function getSafeDomainList(chatbot: {
   } catch {
     return []
   }
+}
+
+async function safeCreateSignedStorageUrl(args: {
+  supabaseAdminClient: SupabaseClient
+  bucket: string
+  storagePath: string | null | undefined
+  expiresInSeconds?: number
+}): Promise<string | null> {
+  try {
+    return await createSignedStorageUrl(args)
+  } catch {
+    return null
+  }
+}
+
+async function resolveWidgetLogoUrl(args: {
+  supabaseAdminClient: SupabaseClient
+  chatbotLogoPath: string | null
+  defaultLogoPath?: string
+  defaultLogoUrl?: string
+  frontendUrl: string
+}): Promise<string> {
+  const customLogoUrl = await safeCreateSignedStorageUrl({
+    supabaseAdminClient: args.supabaseAdminClient,
+    bucket: LOGO_BUCKET,
+    storagePath: args.chatbotLogoPath,
+    expiresInSeconds: 3600,
+  })
+  if (customLogoUrl) {
+    return customLogoUrl
+  }
+
+  const normalizedDefaultPath = args.defaultLogoPath?.trim()
+  if (normalizedDefaultPath) {
+    const defaultSignedLogoUrl = await safeCreateSignedStorageUrl({
+      supabaseAdminClient: args.supabaseAdminClient,
+      bucket: LOGO_BUCKET,
+      storagePath: normalizedDefaultPath,
+      expiresInSeconds: 3600,
+    })
+
+    if (defaultSignedLogoUrl) {
+      return defaultSignedLogoUrl
+    }
+  }
+
+  const normalizedDefaultUrl = args.defaultLogoUrl?.trim()
+  if (normalizedDefaultUrl) {
+    return normalizedDefaultUrl
+  }
+
+  return `${trimTrailingSlash(args.frontendUrl)}/favicon-32x32.png`
 }
 
 export function createWidgetApiRouter(options: WidgetRouterOptions): Router {
@@ -75,11 +129,12 @@ export function createWidgetApiRouter(options: WidgetRouterOptions): Router {
         `Hi, welcome to ${client?.business_name ?? 'Kufu'}. How can we help you today?`
       const primaryColor = chatbotSettings?.primary_color?.trim() || '#6366f1'
 
-      const logoUrl = await createSignedStorageUrl({
+      const logoUrl = await resolveWidgetLogoUrl({
         supabaseAdminClient: options.supabaseAdminClient,
-        bucket: LOGO_BUCKET,
-        storagePath: chatbot.logo_path,
-        expiresInSeconds: 3600,
+        chatbotLogoPath: chatbot.logo_path,
+        defaultLogoPath: options.defaultWidgetLogoPath,
+        defaultLogoUrl: options.defaultWidgetLogoUrl,
+        frontendUrl: options.frontendUrl,
       })
 
       response.json({
@@ -125,11 +180,12 @@ export function createWidgetScriptRouter(options: WidgetRouterOptions): Router {
       const backendBase = trimTrailingSlash(options.backendBaseUrl)
       const key = encodeURIComponent(parsed.data.key)
       const iframeSource = `${frontendBase}/widget?key=${key}`
-      const bubbleLogoUrl = await createSignedStorageUrl({
+      const bubbleLogoUrl = await resolveWidgetLogoUrl({
         supabaseAdminClient: options.supabaseAdminClient,
-        bucket: LOGO_BUCKET,
-        storagePath: chatbot.logo_path,
-        expiresInSeconds: 3600,
+        chatbotLogoPath: chatbot.logo_path,
+        defaultLogoPath: options.defaultWidgetLogoPath,
+        defaultLogoUrl: options.defaultWidgetLogoUrl,
+        frontendUrl: options.frontendUrl,
       })
 
       const script = `(function(){

@@ -46,6 +46,9 @@ export const supabaseAdminClient = createSupabaseAdminClient({
   serviceRoleKey: supabaseServiceRoleKey,
 })
 
+export const defaultWidgetLogoPath = process.env.DEFAULT_WIDGET_LOGO_PATH?.trim() ?? ''
+export const defaultWidgetLogoUrl = process.env.DEFAULT_WIDGET_LOGO_URL?.trim() ?? ''
+
 export const jwtSecret = process.env.JWT_SECRET?.trim() ?? ''
 export const brevoApiKey = process.env.BREVO_API_KEY?.trim() ?? ''
 export const emailFrom = process.env.EMAIL_FROM?.trim() ?? ''

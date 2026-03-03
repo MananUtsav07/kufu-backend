@@ -29,6 +29,8 @@ type ApiRouterOptions = {
   contactLeadNotifyEmail: string;
   demoLeadNotifyEmail: string;
   emailFrom: string;
+  defaultWidgetLogoPath: string;
+  defaultWidgetLogoUrl: string;
   dataStore: DataStore;
   allowDevBypassEmailVerify: boolean;
 };
@@ -107,6 +109,8 @@ export function createApiRouter(options: ApiRouterOptions): Router {
       supabaseAdminClient: options.supabaseAdminClient,
       frontendUrl: options.frontendUrl,
       backendBaseUrl: options.backendBaseUrl,
+      defaultWidgetLogoPath: options.defaultWidgetLogoPath,
+      defaultWidgetLogoUrl: options.defaultWidgetLogoUrl,
     }),
   );
 
