@@ -177,6 +177,29 @@ Base URL (dev): `http://localhost:8787`
 - Auth: none
 - Response: JavaScript embed loader
 
+## WhatsApp Webhook
+
+### `GET /api/whatsapp/webhook`
+- Auth: none (Meta verification callback)
+- Query:
+  - `hub.mode=subscribe`
+  - `hub.verify_token=<verify-token>`
+  - `hub.challenge=<challenge>`
+- Response:
+  - Returns raw `hub.challenge` with `200` when verify token matches an active integration.
+
+### `POST /api/whatsapp/webhook`
+- Auth: none (Meta events callback)
+- Accepts inbound WhatsApp events, generates AI reply, sends outbound message, stores chat rows.
+- Response:
+```json
+{
+  "ok": true,
+  "processed": 2,
+  "failed": 0
+}
+```
+
 ## Dashboard (User)
 
 Auth: Bearer JWT (user/admin)
@@ -315,6 +338,83 @@ Auth: Bearer JWT (user/admin)
   "chatbot": { "id": "...", "name": "Website Bot", "widget_public_key": "..." },
   "snippet": "<script src=\"https://.../widget/kufu.js?key=...\" async></script>"
 }
+```
+
+### `GET /api/dashboard/whatsapp`
+- Returns the current WhatsApp integration and webhook URL.
+- Response:
+```json
+{
+  "ok": true,
+  "webhookUrl": "https://backend.example.com/api/whatsapp/webhook",
+  "integration": {
+    "id": "uuid",
+    "chatbot_id": "uuid",
+    "phone_number_id": "123456789012345",
+    "business_account_id": "1234567890",
+    "display_phone_number": "+91 98xxxxxx10",
+    "verify_token": "token-value",
+    "is_active": true,
+    "last_inbound_at": "2026-03-06T12:00:00.000Z"
+  }
+}
+```
+
+### `POST /api/dashboard/whatsapp/connect`
+- Creates or updates a WhatsApp Cloud API integration.
+- Body:
+```json
+{
+  "chatbotId": "uuid",
+  "phoneNumberId": "123456789012345",
+  "businessAccountId": "1234567890",
+  "displayPhoneNumber": "+91 98xxxxxx10",
+  "accessToken": "EAAB...",
+  "verifyToken": "custom-token",
+  "webhookSecret": "optional-secret",
+  "isActive": true
+}
+```
+- Notes:
+  - `accessToken` is required on first-time setup.
+  - `verifyToken` is optional and auto-generated when omitted.
+- Response:
+```json
+{
+  "ok": true,
+  "webhookUrl": "https://backend.example.com/api/whatsapp/webhook",
+  "integration": {
+    "id": "uuid",
+    "chatbot_id": "uuid",
+    "phone_number_id": "123456789012345",
+    "verify_token": "auto-or-custom-token",
+    "is_active": true
+  }
+}
+```
+
+### `POST /api/dashboard/whatsapp/test-message`
+- Sends a test WhatsApp message via connected number.
+- Body:
+```json
+{
+  "to": "9198xxxxxx10",
+  "message": "Hi! This is a test message from Kufu."
+}
+```
+- Response:
+```json
+{
+  "ok": true,
+  "providerMessageId": "wamid.HBgM..."
+}
+```
+
+### `DELETE /api/dashboard/whatsapp`
+- Disconnects WhatsApp integration for current user.
+- Response:
+```json
+{ "ok": true }
 ```
 
 ### `GET /api/dashboard/chat-history/:chatbotId`

@@ -12,6 +12,7 @@ import { createChatbotRouter } from "./chatbot.js";
 import { createChatRouter } from "./chat.js";
 import { createDashboardRouter } from "./dashboard.js";
 import { createRagRouter } from "./rag.js";
+import { createWhatsAppRouter } from "./whatsapp.js";
 import { createWidgetApiRouter } from "./widget.js";
 
 type ApiRouterOptions = {
@@ -22,6 +23,7 @@ type ApiRouterOptions = {
   frontendUrl: string;
   openAiApiKey: string;
   openAiModel: string;
+  whatsappGraphApiVersion: string;
   openAiClient: OpenAI | null;
   supabaseAdminClient: SupabaseClient | null;
   jwtSecret: string;
@@ -83,7 +85,20 @@ export function createApiRouter(options: ApiRouterOptions): Router {
       backendBaseUrl: options.backendBaseUrl,
       openAiApiKey: options.openAiApiKey,
       openAiModel: options.openAiModel,
+      whatsappGraphApiVersion: options.whatsappGraphApiVersion,
       openAiClient: options.openAiClient,
+    }),
+  );
+
+  router.use(
+    "/whatsapp",
+    createWhatsAppRouter({
+      supabaseAdminClient: options.supabaseAdminClient,
+      openAiApiKey: options.openAiApiKey,
+      openAiModel: options.openAiModel,
+      openAiClient: options.openAiClient,
+      dataStore: options.dataStore,
+      whatsappGraphApiVersion: options.whatsappGraphApiVersion,
     }),
   );
 

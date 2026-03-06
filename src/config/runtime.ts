@@ -38,6 +38,7 @@ export const dataDir = configuredDataDir
 export const openAiApiKey = process.env.OPENAI_API_KEY?.trim() ?? ''
 export const openAiModel = process.env.OPENAI_MODEL?.trim() || 'gpt-4o-mini'
 export const openAiClient = openAiApiKey ? new OpenAI({ apiKey: openAiApiKey }) : null
+export const whatsappGraphApiVersion = process.env.WHATSAPP_GRAPH_API_VERSION?.trim() || 'v22.0'
 
 export const supabaseUrl = process.env.SUPABASE_URL?.trim() ?? ''
 export const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() ?? ''

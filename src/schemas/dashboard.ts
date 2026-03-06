@@ -124,3 +124,23 @@ export const dashboardTestChatSchema = z
       .max(12),
   })
   .strict()
+
+export const dashboardWhatsAppConnectSchema = z
+  .object({
+    chatbotId: z.string().uuid(),
+    phoneNumberId: z.string().trim().min(3).max(100),
+    businessAccountId: z.string().trim().max(120).optional().or(z.literal('')),
+    displayPhoneNumber: z.string().trim().max(40).optional().or(z.literal('')),
+    accessToken: z.string().trim().max(1000).optional().or(z.literal('')),
+    verifyToken: z.string().trim().max(200).optional().or(z.literal('')),
+    webhookSecret: z.string().trim().max(200).optional().or(z.literal('')),
+    isActive: z.boolean().optional().default(true),
+  })
+  .strict()
+
+export const dashboardWhatsAppTestMessageSchema = z
+  .object({
+    to: z.string().trim().min(6).max(30),
+    message: z.string().trim().min(1).max(1000),
+  })
+  .strict()

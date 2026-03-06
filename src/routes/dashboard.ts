@@ -27,6 +27,8 @@ import {
   dashboardTestChatSchema,
   dashboardTicketCreateSchema,
   dashboardTicketUpdateSchema,
+  dashboardWhatsAppConnectSchema,
+  dashboardWhatsAppTestMessageSchema,
 } from "../schemas/dashboard.js";
 import { writeAuditLog } from "../services/auditService.js";
 import { computeChatAnalytics } from "../services/analyticsService.js";
@@ -64,6 +66,15 @@ import {
   removeObjectFromStorage,
   uploadBufferToStorage,
 } from "../services/storageService.js";
+import {
+  createWhatsAppVerifyToken,
+  loadWhatsAppIntegrationByUserId,
+  normalizeWhatsAppAddress,
+  removeWhatsAppIntegrationByUserId,
+  sendWhatsAppTextMessage,
+  upsertWhatsAppIntegration,
+  type WhatsAppIntegrationRow,
+} from "../services/whatsappService.js";
 
 type DashboardRouterOptions = {
   jwtSecret: string;
@@ -71,6 +82,7 @@ type DashboardRouterOptions = {
   backendBaseUrl: string;
   openAiApiKey: string;
   openAiModel: string;
+  whatsappGraphApiVersion: string;
   openAiClient: OpenAI | null;
 };
 
@@ -218,6 +230,28 @@ async function loadAuthorizedChatbot(args: {
   }
 
   return chatbot;
+}
+
+function toDashboardWhatsAppIntegrationPayload(
+  integration: WhatsAppIntegrationRow | null,
+) {
+  if (!integration) {
+    return null;
+  }
+
+  return {
+    id: integration.id,
+    chatbot_id: integration.chatbot_id,
+    phone_number_id: integration.phone_number_id,
+    business_account_id: integration.business_account_id,
+    display_phone_number: integration.display_phone_number,
+    verify_token: integration.verify_token,
+    is_active: integration.is_active,
+    last_inbound_at: integration.last_inbound_at,
+    created_at: integration.created_at,
+    updated_at: integration.updated_at,
+    has_access_token: Boolean(integration.access_token),
+  };
 }
 
 export function createDashboardRouter(options: DashboardRouterOptions): Router {
@@ -653,6 +687,185 @@ export function createDashboardRouter(options: DashboardRouterOptions): Router {
 
       if (error) {
         throw new AppError("Failed to delete chatbot", 500, error);
+      }
+
+      response.json({ ok: true });
+    }),
+  );
+
+  router.get(
+    "/whatsapp",
+    asyncHandler(async (request, response) => {
+      const authRequest = asAuthenticatedRequest(request);
+      const integration = await loadWhatsAppIntegrationByUserId(
+        options.supabaseAdminClient,
+        authRequest.user.userId,
+      );
+
+      const webhookUrl = `${trimTrailingSlash(options.backendBaseUrl)}/api/whatsapp/webhook`;
+
+      response.json({
+        ok: true,
+        webhookUrl,
+        integration: toDashboardWhatsAppIntegrationPayload(integration),
+      });
+    }),
+  );
+
+  router.post(
+    "/whatsapp/connect",
+    asyncHandler(async (request, response) => {
+      const parsed = dashboardWhatsAppConnectSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return respondValidationError(parsed.error, response);
+      }
+
+      const authRequest = asAuthenticatedRequest(request);
+      const user = await loadUserById(
+        options.supabaseAdminClient,
+        authRequest.user.userId,
+      );
+      if (!user) {
+        throw new AppError("Unauthorized", 401);
+      }
+
+      const chatbot = await loadAuthorizedChatbot({
+        supabaseAdminClient: options.supabaseAdminClient,
+        chatbotId: parsed.data.chatbotId,
+        userId: authRequest.user.userId,
+        role: authRequest.user.role,
+      });
+
+      const existingIntegration = await loadWhatsAppIntegrationByUserId(
+        options.supabaseAdminClient,
+        authRequest.user.userId,
+      );
+
+      const accessToken =
+        (parsed.data.accessToken ?? "").trim() ||
+        existingIntegration?.access_token ||
+        "";
+      if (!accessToken) {
+        throw new AppError(
+          "Access token is required for first-time WhatsApp setup",
+          400,
+        );
+      }
+
+      const verifyToken =
+        (parsed.data.verifyToken ?? "").trim() ||
+        existingIntegration?.verify_token ||
+        createWhatsAppVerifyToken();
+
+      const integration = await upsertWhatsAppIntegration(
+        options.supabaseAdminClient,
+        {
+          userId: authRequest.user.userId,
+          clientId: chatbot.client_id ?? authRequest.user.clientId,
+          chatbotId: chatbot.id,
+          phoneNumberId: parsed.data.phoneNumberId,
+          businessAccountId: parsed.data.businessAccountId || null,
+          displayPhoneNumber: parsed.data.displayPhoneNumber || null,
+          accessToken,
+          verifyToken,
+          webhookSecret: parsed.data.webhookSecret || null,
+          isActive: parsed.data.isActive,
+        },
+      );
+
+      await writeAuditLog({
+        supabaseAdminClient: options.supabaseAdminClient,
+        actorUserId: authRequest.user.userId,
+        action: "dashboard.whatsapp.connect",
+        metadata: {
+          chatbotId: chatbot.id,
+          phoneNumberId: integration.phone_number_id,
+          isActive: integration.is_active,
+        },
+      });
+
+      const webhookUrl = `${trimTrailingSlash(options.backendBaseUrl)}/api/whatsapp/webhook`;
+
+      response.json({
+        ok: true,
+        webhookUrl,
+        integration: toDashboardWhatsAppIntegrationPayload(integration),
+      });
+    }),
+  );
+
+  router.post(
+    "/whatsapp/test-message",
+    asyncHandler(async (request, response) => {
+      const parsed = dashboardWhatsAppTestMessageSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return respondValidationError(parsed.error, response);
+      }
+
+      const authRequest = asAuthenticatedRequest(request);
+      const integration = await loadWhatsAppIntegrationByUserId(
+        options.supabaseAdminClient,
+        authRequest.user.userId,
+      );
+
+      if (!integration || !integration.is_active) {
+        throw new AppError("WhatsApp integration is not connected", 404);
+      }
+
+      const to = normalizeWhatsAppAddress(parsed.data.to);
+      if (!to) {
+        throw new AppError("Recipient phone number is invalid", 400);
+      }
+
+      const sent = await sendWhatsAppTextMessage({
+        graphApiVersion: options.whatsappGraphApiVersion,
+        accessToken: integration.access_token,
+        phoneNumberId: integration.phone_number_id,
+        to,
+        text: parsed.data.message,
+      });
+
+      await writeAuditLog({
+        supabaseAdminClient: options.supabaseAdminClient,
+        actorUserId: authRequest.user.userId,
+        action: "dashboard.whatsapp.test_message",
+        metadata: {
+          phoneNumberId: integration.phone_number_id,
+          to,
+          providerMessageId: sent.providerMessageId,
+        },
+      });
+
+      response.json({
+        ok: true,
+        providerMessageId: sent.providerMessageId,
+      });
+    }),
+  );
+
+  router.delete(
+    "/whatsapp",
+    asyncHandler(async (request, response) => {
+      const authRequest = asAuthenticatedRequest(request);
+      const existingIntegration = await loadWhatsAppIntegrationByUserId(
+        options.supabaseAdminClient,
+        authRequest.user.userId,
+      );
+
+      if (existingIntegration) {
+        await removeWhatsAppIntegrationByUserId(
+          options.supabaseAdminClient,
+          authRequest.user.userId,
+        );
+
+        await writeAuditLog({
+          supabaseAdminClient: options.supabaseAdminClient,
+          actorUserId: authRequest.user.userId,
+          action: "dashboard.whatsapp.disconnect",
+          metadata: {
+            phoneNumberId: existingIntegration.phone_number_id,
+          },
+        });
       }
 
       response.json({ ok: true });

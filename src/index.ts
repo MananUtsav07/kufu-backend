@@ -38,6 +38,7 @@ import {
   openAiApiKey,
   openAiClient,
   openAiModel,
+  whatsappGraphApiVersion,
   port,
   supabaseAdminClient,
 } from "./config/runtime.js";
@@ -72,6 +73,7 @@ app.use(
     frontendUrl,
     openAiApiKey,
     openAiModel,
+    whatsappGraphApiVersion,
     openAiClient,
     supabaseAdminClient,
     jwtSecret,
