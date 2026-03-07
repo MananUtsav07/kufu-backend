@@ -50,6 +50,26 @@ type ClientLeadCaptureNotificationPayload = {
   leadMessage: string
 }
 
+type PropertyTicketNotificationPayload = {
+  to: string
+  submittedAtIso: string
+  ownerCompanyName: string
+  tenantName: string
+  tenantAccessId: string
+  subject: string
+  message: string
+}
+
+type PropertyEscalationNotificationPayload = {
+  to: string
+  submittedAtIso: string
+  ownerCompanyName: string
+  tenantName: string
+  tenantAccessId: string
+  intent: string
+  message: string
+}
+
 export function createMailer(options: MailerOptions) {
   const { brevoApiKey, emailFrom } = options
 
@@ -263,6 +283,92 @@ export function createMailer(options: MailerOptions) {
             `Chatbot: ${chatbotName}`,
             `Visitor Session: ${visitorId}`,
             `Lead Message: ${leadMessage}`,
+          ].join('\n'),
+        },
+        {
+          headers: {
+            'api-key': brevoApiKey,
+            'Content-Type': 'application/json',
+          },
+        },
+      )
+    },
+    async sendPropertyTicketNotification(payload: PropertyTicketNotificationPayload): Promise<void> {
+      const { to, submittedAtIso, ownerCompanyName, tenantName, tenantAccessId, subject, message } = payload
+
+      const html = `
+        <div style="font-family: Inter, Arial, sans-serif; max-width: 640px; margin: 0 auto; color: #0f172a;">
+          <h2 style="margin-bottom: 12px;">New Tenant Support Ticket</h2>
+          <p style="margin-bottom: 16px; color: #334155;">A tenant raised a support request in Property Management.</p>
+          <table style="border-collapse: collapse; width: 100%; font-size: 14px;">
+            <tbody>
+              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Submitted At</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${submittedAtIso}</td></tr>
+              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Owner</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${ownerCompanyName}</td></tr>
+              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Tenant</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${tenantName} (${tenantAccessId})</td></tr>
+              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Subject</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${subject}</td></tr>
+              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Message</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${message}</td></tr>
+            </tbody>
+          </table>
+        </div>
+      `
+
+      await axios.post(
+        'https://api.brevo.com/v3/smtp/email',
+        {
+          sender: { name: 'Kufu', email: emailFrom },
+          to: [{ email: to }],
+          subject: 'New Tenant Ticket - Kufu Property Management',
+          htmlContent: html,
+          textContent: [
+            'New Tenant Support Ticket',
+            `Submitted At: ${submittedAtIso}`,
+            `Owner: ${ownerCompanyName}`,
+            `Tenant: ${tenantName} (${tenantAccessId})`,
+            `Subject: ${subject}`,
+            `Message: ${message}`,
+          ].join('\n'),
+        },
+        {
+          headers: {
+            'api-key': brevoApiKey,
+            'Content-Type': 'application/json',
+          },
+        },
+      )
+    },
+    async sendPropertyEscalationNotification(payload: PropertyEscalationNotificationPayload): Promise<void> {
+      const { to, submittedAtIso, ownerCompanyName, tenantName, tenantAccessId, intent, message } = payload
+
+      const html = `
+        <div style="font-family: Inter, Arial, sans-serif; max-width: 640px; margin: 0 auto; color: #0f172a;">
+          <h2 style="margin-bottom: 12px;">Tenant Chat Escalation</h2>
+          <p style="margin-bottom: 16px; color: #334155;">The AI assistant escalated a tenant conversation to owner support.</p>
+          <table style="border-collapse: collapse; width: 100%; font-size: 14px;">
+            <tbody>
+              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Submitted At</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${submittedAtIso}</td></tr>
+              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Owner</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${ownerCompanyName}</td></tr>
+              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Tenant</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${tenantName} (${tenantAccessId})</td></tr>
+              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Intent</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${intent}</td></tr>
+              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Message</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${message}</td></tr>
+            </tbody>
+          </table>
+        </div>
+      `
+
+      await axios.post(
+        'https://api.brevo.com/v3/smtp/email',
+        {
+          sender: { name: 'Kufu', email: emailFrom },
+          to: [{ email: to }],
+          subject: 'Tenant Escalation - Kufu Property Management',
+          htmlContent: html,
+          textContent: [
+            'Tenant Chat Escalation',
+            `Submitted At: ${submittedAtIso}`,
+            `Owner: ${ownerCompanyName}`,
+            `Tenant: ${tenantName} (${tenantAccessId})`,
+            `Intent: ${intent}`,
+            `Message: ${message}`,
           ].join('\n'),
         },
         {
