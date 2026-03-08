@@ -11,7 +11,6 @@ import { createAuthRouter } from "./auth.js";
 import { createChatbotRouter } from "./chatbot.js";
 import { createChatRouter } from "./chat.js";
 import { createDashboardRouter } from "./dashboard.js";
-import { createPropertyManagementRouter } from "./propertyManagement.js";
 import { createRagRouter } from "./rag.js";
 import { createWhatsAppRouter } from "./whatsapp.js";
 import { createWidgetApiRouter } from "./widget.js";
@@ -88,18 +87,6 @@ export function createApiRouter(options: ApiRouterOptions): Router {
       openAiModel: options.openAiModel,
       whatsappGraphApiVersion: options.whatsappGraphApiVersion,
       openAiClient: options.openAiClient,
-    }),
-  );
-
-  router.use(
-    "/property-management",
-    createPropertyManagementRouter({
-      jwtSecret: options.jwtSecret,
-      supabaseAdminClient: options.supabaseAdminClient,
-      openAiApiKey: options.openAiApiKey,
-      openAiModel: options.openAiModel,
-      openAiClient: options.openAiClient,
-      mailer,
     }),
   );
 

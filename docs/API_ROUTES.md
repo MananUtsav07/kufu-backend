@@ -691,9 +691,3 @@ Non-2xx responses follow:
   "requestId": "uuid"
 }
 ```
-
-## Property Management Module
-
-Property management routes are documented in:
-
-- `docs/PROPERTY_MANAGEMENT_API.md`
