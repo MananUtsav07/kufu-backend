@@ -6,7 +6,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { authMiddleware, type AuthenticatedRequest } from '../lib/auth-middleware.js'
 import { asyncHandler, AppError } from '../lib/errors.js'
 import { getClientIp, getTimestamp, respondValidationError } from '../lib/http.js'
-import { logError } from '../lib/logger.js'
+import { logError, logWarn } from '../lib/logger.js'
 import { createFixedWindowLimiter } from '../lib/rateLimit.js'
 import { getRequestIdFromRequest } from '../lib/requestContext.js'
 import { buildSystemPrompt } from '../lib/systemPrompt.js'
@@ -19,6 +19,7 @@ import {
 } from '../schemas/whatsapp.js'
 import { retrieveRelevantChunks } from '../rag/retrieval.js'
 import {
+  appendLeadCaptureAcknowledgement,
   estimateTokens,
   loadClientKnowledgeText,
   storeChatMessages,
@@ -32,6 +33,7 @@ import {
 import {
   loadChatbotById,
   loadClientById,
+  loadClientByUserId,
   loadUserById,
   loadUserChatbots,
 } from '../services/tenantService.js'
@@ -459,12 +461,50 @@ async function processIncomingTextEvent(args: {
     return
   }
 
-  const reply = await generateWhatsAppReply({
+  const aiReply = await generateWhatsAppReply({
     integration,
     userRole: ownerUser.role,
     incomingText: event.text,
     options,
   })
+
+  const sessionId = `whatsapp:${event.from}`
+  const linkedChatbot = await loadChatbotById(
+    options.supabaseAdminClient,
+    integration.chatbot_id,
+  )
+  const fallbackClient = await loadClientByUserId(
+    options.supabaseAdminClient,
+    ownerUser.id,
+  )
+  const resolvedClientId =
+    integration.client_id ?? linkedChatbot?.client_id ?? fallbackClient?.id ?? null
+
+  const leadCaptureResult = resolvedClientId
+    ? await upsertLeadFromMessage(options.supabaseAdminClient, {
+        clientId: resolvedClientId,
+        content: event.text,
+        sessionId,
+      })
+    : {
+        captured: false,
+        email: null,
+        phone: null,
+        leadText: null,
+        hasDemoIntent: false,
+      }
+
+  const leadCaptured = leadCaptureResult.captured
+  if (!resolvedClientId) {
+    logWarn({
+      type: 'whatsapp_lead_capture_skipped_missing_client',
+      path: '/api/whatsapp/webhook',
+      userId: ownerUser.id,
+      chatbotId: integration.chatbot_id,
+      integrationId: integration.id,
+    })
+  }
+  const reply = appendLeadCaptureAcknowledgement(aiReply, leadCaptured)
 
   await sendWhatsAppTextMessage({
     graphApiVersion: options.whatsappGraphApiVersion,
@@ -474,7 +514,6 @@ async function processIncomingTextEvent(args: {
     text: reply,
   })
 
-  const sessionId = `whatsapp:${event.from}`
   await storeChatMessages({
     supabaseAdminClient: options.supabaseAdminClient,
     userId: ownerUser.id,
@@ -491,22 +530,6 @@ async function processIncomingTextEvent(args: {
       1,
     )
   }
-
-  const leadCaptureResult = integration.client_id
-    ? await upsertLeadFromMessage(options.supabaseAdminClient, {
-        clientId: integration.client_id,
-        content: event.text,
-        sessionId,
-      })
-    : {
-        captured: false,
-        email: null,
-        phone: null,
-        leadText: null,
-        hasDemoIntent: false,
-      }
-
-  const leadCaptured = leadCaptureResult.captured
 
   await insertChatHistoryRow({
     supabaseAdminClient: options.supabaseAdminClient,

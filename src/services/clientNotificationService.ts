@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 
 import type { createMailer } from '../lib/mailer.js'
-import { loadChatbotById, loadClientById, loadUserById } from './tenantService.js'
+import { loadChatbotById, loadClientById, loadClientByUserId, loadUserById } from './tenantService.js'
 
 type Mailer = ReturnType<typeof createMailer>
 
@@ -16,7 +16,7 @@ async function resolveOwnerNotificationContext(args: {
 
   const client = chatbot.client_id
     ? await loadClientById(args.supabaseAdminClient, chatbot.client_id)
-    : null
+    : await loadClientByUserId(args.supabaseAdminClient, chatbot.user_id)
   if (!client) {
     return null
   }

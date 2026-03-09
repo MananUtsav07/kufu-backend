@@ -112,4 +112,82 @@ describe('dashboard, plans, and chat integration', () => {
     expect(response.body.error).toBe('Unhandled server error')
     expect(typeof response.body.requestId).toBe('string')
   })
+
+  it('captures leads with contact info and appends acknowledgement to chat reply', async () => {
+    const { app, seed } = buildTestApp({ openAiMode: 'success' })
+    const token = await loginWithCredentials(app, seed.starterUser.email, seed.starterUser.password)
+
+    const chatResponse = await request(app)
+      .post('/api/chat')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        chatbot_id: seed.starterUser.chatbotId,
+        sessionId: 'lead-capture-dashboard',
+        messages: [{ role: 'user', content: 'My email is lead.person@example.com' }],
+      })
+
+    expect(chatResponse.status).toBe(200)
+    expect(chatResponse.body.ok).toBe(true)
+    expect(chatResponse.body.reply).toContain('Test reply')
+    expect(chatResponse.body.reply).toContain('Our team will contact you shortly.')
+
+    const leadsResponse = await request(app)
+      .get('/api/dashboard/leads')
+      .set('Authorization', `Bearer ${token}`)
+
+    expect(leadsResponse.status).toBe(200)
+    expect(leadsResponse.body.ok).toBe(true)
+    expect(leadsResponse.body.leads).toHaveLength(1)
+    expect(leadsResponse.body.leads[0].email).toBe('lead.person@example.com')
+
+    const noContactResponse = await request(app)
+      .post('/api/chat')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        chatbot_id: seed.starterUser.chatbotId,
+        sessionId: 'no-lead-dashboard',
+        messages: [{ role: 'user', content: 'Tell me about pricing' }],
+      })
+
+    expect(noContactResponse.status).toBe(200)
+    expect(noContactResponse.body.reply).toBe('Test reply')
+  })
+
+  it('captures widget leads even when chatbot.client_id is null using owner client fallback', async () => {
+    const { app, seed, supabase } = buildTestApp({ openAiMode: 'success' })
+    const token = await loginWithCredentials(app, seed.starterUser.email, seed.starterUser.password)
+
+    await supabase
+      .from('chatbots')
+      .update({ client_id: null })
+      .eq('id', seed.starterUser.chatbotId)
+
+    const chatbotLookup = await supabase
+      .from('chatbots')
+      .select('widget_public_key')
+      .eq('id', seed.starterUser.chatbotId)
+      .maybeSingle<{ widget_public_key: string }>()
+
+    expect(chatbotLookup.error).toBeNull()
+    const widgetKey = chatbotLookup.data?.widget_public_key
+    expect(widgetKey).toBeTruthy()
+
+    const widgetResponse = await request(app).post('/api/chat').send({
+      key: widgetKey,
+      sessionId: 'widget-fallback-client-id',
+      messages: [{ role: 'user', content: 'Contact +1 212 555 0199 please' }],
+    })
+
+    expect(widgetResponse.status).toBe(200)
+    expect(widgetResponse.body.ok).toBe(true)
+    expect(widgetResponse.body.reply).toContain('Our team will contact you shortly.')
+
+    const leadsResponse = await request(app)
+      .get('/api/dashboard/leads')
+      .set('Authorization', `Bearer ${token}`)
+
+    expect(leadsResponse.status).toBe(200)
+    expect(leadsResponse.body.leads).toHaveLength(1)
+    expect(leadsResponse.body.leads[0].phone).toBe('+12125550199')
+  })
 })

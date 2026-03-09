@@ -1,9 +1,12 @@
 ﻿import type { SupabaseClient } from '@supabase/supabase-js'
 import { AppError } from '../lib/errors.js'
 
-const emailRegex = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i
-const phoneRegex = /(?:\+?\d[\d\s\-()]{7,}\d)/i
+const emailMatchRegex = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i
+const phoneMatchRegex = /(?:\+?\d[\d\s\-()]{7,}\d)/i
+const emailReplaceRegex = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi
+const phoneReplaceRegex = /(?:\+?\d[\d\s\-()]{7,}\d)/g
 const demoIntentRegex = /\b(book|schedule|arrange).{0,20}\b(demo|call|meeting)\b|\bdemo\b/i
+export const LEAD_CAPTURE_ACKNOWLEDGEMENT = 'Thanks for sharing your details. Our team will contact you shortly.'
 
 export type ClientKnowledgeRow = {
   client_id: string
@@ -26,6 +29,12 @@ export type LeadCaptureResult = {
   phone: string | null
   leadText: string | null
   hasDemoIntent: boolean
+}
+
+type LeadRecord = {
+  id: string
+  email: string | null
+  phone: string | null
 }
 
 export function estimateTokens(content: string): number {
@@ -118,10 +127,14 @@ function normalizePhone(value: string): string {
   return value.replace(/[^\d+]/g, '').trim()
 }
 
+function normalizeEmail(value: string): string {
+  return value.trim().toLowerCase()
+}
+
 function extractLeadText(content: string): string | null {
   const stripped = content
-    .replace(emailRegex, ' ')
-    .replace(phoneRegex, ' ')
+    .replace(emailReplaceRegex, ' ')
+    .replace(phoneReplaceRegex, ' ')
     .replace(/\b(email|mail|phone|number|whatsapp|contact|my|is|at)\b/gi, ' ')
     .replace(/[:;,]/g, ' ')
     .replace(/\s+/g, ' ')
@@ -130,13 +143,43 @@ function extractLeadText(content: string): string | null {
   return stripped.length > 0 ? stripped : null
 }
 
+function extractFirstEmail(content: string): string | null {
+  const matches = content.match(emailMatchRegex)
+  if (!matches || matches.length === 0) {
+    return null
+  }
+
+  return normalizeEmail(matches[0])
+}
+
+function extractFirstPhone(content: string): string | null {
+  const matches = content.match(phoneMatchRegex)
+  if (!matches || matches.length === 0) {
+    return null
+  }
+
+  return normalizePhone(matches[0])
+}
+
+export function appendLeadCaptureAcknowledgement(reply: string, leadCaptured: boolean): string {
+  const normalizedReply = reply.trim()
+  if (!leadCaptured || normalizedReply.length === 0) {
+    return normalizedReply
+  }
+
+  if (normalizedReply.toLowerCase().includes(LEAD_CAPTURE_ACKNOWLEDGEMENT.toLowerCase())) {
+    return normalizedReply
+  }
+
+  return `${normalizedReply}\n\n${LEAD_CAPTURE_ACKNOWLEDGEMENT}`
+}
+
 export async function upsertLeadFromMessage(
   supabaseAdminClient: SupabaseClient,
   input: LeadCaptureInput,
 ): Promise<LeadCaptureResult> {
-  const email = input.content.match(emailRegex)?.[0] ?? null
-  const phoneRaw = input.content.match(phoneRegex)?.[0] ?? null
-  const phone = phoneRaw ? normalizePhone(phoneRaw) : null
+  const email = extractFirstEmail(input.content)
+  const phone = extractFirstPhone(input.content)
   const hasDemoIntent = demoIntentRegex.test(input.content)
   const extractedLeadText = extractLeadText(input.content)
   const leadText = hasDemoIntent
@@ -145,58 +188,58 @@ export async function upsertLeadFromMessage(
       : 'Requested demo in chat'
     : extractedLeadText
 
-  if (!email && !phone && !hasDemoIntent) {
+  if (!email && !phone) {
     return {
       captured: false,
       email: null,
       phone: null,
       leadText: null,
-      hasDemoIntent: false,
+      hasDemoIntent,
     }
   }
 
-  let existingLeadId: string | null = null
+  let existingLead: LeadRecord | null = null
 
   if (email) {
     const { data } = await supabaseAdminClient
       .from('leads')
-      .select('id')
+      .select('id, email, phone')
       .eq('client_id', input.clientId)
       .eq('email', email)
       .order('created_at', { ascending: false })
       .limit(1)
-      .maybeSingle<{ id: string }>()
+      .maybeSingle<LeadRecord>()
 
-    if (data?.id) {
-      existingLeadId = data.id
+    if (data) {
+      existingLead = data
     }
   }
 
-  if (!existingLeadId && phone) {
+  if (!existingLead && phone) {
     const { data } = await supabaseAdminClient
       .from('leads')
-      .select('id')
+      .select('id, email, phone')
       .eq('client_id', input.clientId)
       .eq('phone', phone)
       .order('created_at', { ascending: false })
       .limit(1)
-      .maybeSingle<{ id: string }>()
+      .maybeSingle<LeadRecord>()
 
-    if (data?.id) {
-      existingLeadId = data.id
+    if (data) {
+      existingLead = data
     }
   }
 
-  if (existingLeadId) {
+  if (existingLead) {
     const { error } = await supabaseAdminClient
       .from('leads')
       .update({
-        email,
-        phone,
+        email: email ?? existingLead.email ?? null,
+        phone: phone ?? existingLead.phone ?? null,
         need: leadText,
         source: 'chat',
       })
-      .eq('id', existingLeadId)
+      .eq('id', existingLead.id)
 
     if (error) {
       throw new AppError(`Failed to update lead from chat: ${error.message}`, 500)

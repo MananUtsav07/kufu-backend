@@ -16,6 +16,7 @@ type TestAppContext = {
   app: express.Express
   seed: TestSeed
   jwtSecret: string
+  supabase: ReturnType<typeof createSeededSupabaseClient>['supabase']
 }
 
 export function buildTestApp(options: BuildTestAppOptions = {}): TestAppContext {
@@ -29,6 +30,15 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestAppContext 
     openAiMode === 'disabled'
       ? null
       : ({
+          embeddings: {
+            create: async () => ({
+              data: [
+                {
+                  embedding: [0.001, 0.002, 0.003, 0.004],
+                },
+              ],
+            }),
+          },
           chat: {
             completions: {
               create: async () => {
@@ -111,5 +121,6 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestAppContext 
     app,
     seed,
     jwtSecret,
+    supabase,
   }
 }

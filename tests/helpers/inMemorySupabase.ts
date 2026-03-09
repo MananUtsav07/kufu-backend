@@ -189,6 +189,13 @@ class InMemorySupabaseClient {
       error: null,
     }),
   }
+
+  public async rpc(_functionName: string, _parameters?: Record<string, unknown>) {
+    return {
+      data: [],
+      error: null,
+    }
+  }
 }
 
 class InMemoryQueryBuilder implements PromiseLike<QueryResult<unknown>> {

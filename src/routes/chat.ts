@@ -10,7 +10,7 @@ import {
   hashIp,
   respondValidationError,
 } from "../lib/http.js";
-import { logError } from "../lib/logger.js";
+import { logError, logWarn } from "../lib/logger.js";
 import { createFixedWindowLimiter } from "../lib/rateLimit.js";
 import { getRequestIdFromRequest } from "../lib/requestContext.js";
 import { sanitizeMessages } from "../lib/sanitizeMessages.js";
@@ -19,6 +19,7 @@ import type { createMailer } from "../lib/mailer.js";
 import { retrieveRelevantChunks } from "../rag/retrieval.js";
 import { chatSchema, chatLogSchema } from "../schemas/api.js";
 import {
+  appendLeadCaptureAcknowledgement,
   estimateTokens,
   loadClientKnowledgeText,
   storeChatMessages,
@@ -149,7 +150,7 @@ async function resolveChatContext(
     }
 
     let chatbotId = providedChatbotId || null;
-    let resolvedClientId = authUser.clientId;
+    let resolvedClientId: string | null = authUser.clientId;
     let resolvedChatbotName: string | null = null;
     if (chatbotId) {
       const chatbot = await loadChatbotById(
@@ -160,6 +161,13 @@ async function resolveChatContext(
         throw new AppError("Chatbot not found", 404);
       }
       resolvedClientId = chatbot.client_id ?? authUser.clientId;
+      if (!resolvedClientId) {
+        const fallbackClient = await loadClientByUserId(
+          options.supabaseAdminClient,
+          user.id,
+        );
+        resolvedClientId = fallbackClient?.id ?? null;
+      }
       resolvedChatbotName = chatbot.name;
     }
 
@@ -249,10 +257,14 @@ async function resolveChatContext(
       throw new AppError(usage.reason || "Plan usage limit reached", 403);
     }
 
+    const fallbackClient = chatbot.client_id
+      ? null
+      : await loadClientByUserId(options.supabaseAdminClient, ownerUser.id);
+
     return {
       mode: "widget",
       userId: ownerUser.id,
-      clientId: chatbot.client_id,
+      clientId: chatbot.client_id ?? fallbackClient?.id ?? null,
       chatbotId: chatbot.id,
       chatbotName: chatbot.name,
       userRole: ownerUser.role,
@@ -428,9 +440,39 @@ export function createChatRouter(options: ChatRouterOptions): Router {
         temperature: 0.4,
       });
 
-      const reply =
+      const aiReply =
         completion.choices?.[0]?.message?.content?.trim() ||
         "Sorry - I couldn't generate a response.";
+
+      let leadCaptured = false;
+      let capturedLeadEmail: string | null = null;
+      let capturedLeadPhone: string | null = null;
+      let capturedLeadText: string | null = null;
+      if (context.clientId) {
+        const leadCaptureResult = await upsertLeadFromMessage(
+          options.supabaseAdminClient,
+          {
+            clientId: context.clientId,
+            content: lastUserMessage,
+            sessionId,
+          },
+        );
+        leadCaptured = leadCaptureResult.captured;
+        capturedLeadEmail = leadCaptureResult.email;
+        capturedLeadPhone = leadCaptureResult.phone;
+        capturedLeadText = leadCaptureResult.leadText;
+      } else if (context.mode !== "public") {
+        logWarn({
+          type: "lead_capture_skipped_missing_client",
+          requestId: getRequestIdFromRequest(request),
+          path: "/api/chat",
+          mode: context.mode,
+          chatbotId: context.chatbotId,
+          userId: context.userId,
+        });
+      }
+
+      const reply = appendLeadCaptureAcknowledgement(aiReply, leadCaptured);
 
       if (context.userId && context.chatbotId) {
         await storeChatMessages({
@@ -454,25 +496,6 @@ export function createChatRouter(options: ChatRouterOptions): Router {
           1,
         );
         context.subscription = updatedSubscription;
-      }
-
-      let leadCaptured = false;
-      let capturedLeadEmail: string | null = null;
-      let capturedLeadPhone: string | null = null;
-      let capturedLeadText: string | null = null;
-      if (context.clientId) {
-        const leadCaptureResult = await upsertLeadFromMessage(
-          options.supabaseAdminClient,
-          {
-          clientId: context.clientId,
-          content: lastUserMessage,
-          sessionId,
-          },
-        );
-        leadCaptured = leadCaptureResult.captured;
-        capturedLeadEmail = leadCaptureResult.email;
-        capturedLeadPhone = leadCaptureResult.phone;
-        capturedLeadText = leadCaptureResult.leadText;
       }
 
       if (context.mode === "widget" && context.chatbotId) {

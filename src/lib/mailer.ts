@@ -53,6 +53,24 @@ type ClientLeadCaptureNotificationPayload = {
   leadMessage: string
 }
 
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;')
+}
+
+function toSafeCell(value: string | null | undefined): string {
+  const normalized = typeof value === 'string' ? value.trim() : ''
+  if (!normalized) {
+    return '-'
+  }
+
+  return escapeHtml(normalized)
+}
+
 export function createMailer(options: MailerOptions) {
   const { brevoApiKey, emailFrom } = options
 
@@ -192,6 +210,11 @@ export function createMailer(options: MailerOptions) {
     },
     async sendClientNewChatNotification(payload: ClientNewChatNotificationPayload): Promise<void> {
       const { to, submittedAtIso, chatbotName, businessName, visitorId, firstMessage } = payload
+      const safeSubmittedAt = toSafeCell(submittedAtIso)
+      const safeBusinessName = toSafeCell(businessName)
+      const safeChatbotName = toSafeCell(chatbotName)
+      const safeVisitorId = toSafeCell(visitorId)
+      const safeFirstMessage = toSafeCell(firstMessage)
 
       const html = `
         <div style="font-family: Inter, Arial, sans-serif; max-width: 640px; margin: 0 auto; color: #0f172a;">
@@ -199,11 +222,11 @@ export function createMailer(options: MailerOptions) {
           <p style="margin-bottom: 16px; color: #334155;">A new visitor started a chat with your bot.</p>
           <table style="border-collapse: collapse; width: 100%; font-size: 14px;">
             <tbody>
-              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Submitted At</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${submittedAtIso}</td></tr>
-              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Business</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${businessName}</td></tr>
-              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Chatbot</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${chatbotName}</td></tr>
-              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Visitor Session</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${visitorId}</td></tr>
-              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">First Message</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${firstMessage}</td></tr>
+              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Submitted At</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${safeSubmittedAt}</td></tr>
+              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Business</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${safeBusinessName}</td></tr>
+              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Chatbot</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${safeChatbotName}</td></tr>
+              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Visitor Session</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${safeVisitorId}</td></tr>
+              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">First Message</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${safeFirstMessage}</td></tr>
             </tbody>
           </table>
         </div>
@@ -235,6 +258,14 @@ export function createMailer(options: MailerOptions) {
     },
     async sendClientLeadCaptureNotification(payload: ClientLeadCaptureNotificationPayload): Promise<void> {
       const { to, submittedAtIso, chatbotName, businessName, visitorId, leadEmail, leadPhone, leadText, leadMessage } = payload
+      const safeSubmittedAt = toSafeCell(submittedAtIso)
+      const safeBusinessName = toSafeCell(businessName)
+      const safeChatbotName = toSafeCell(chatbotName)
+      const safeVisitorId = toSafeCell(visitorId)
+      const safeLeadEmail = toSafeCell(leadEmail)
+      const safeLeadPhone = toSafeCell(leadPhone)
+      const safeLeadText = toSafeCell(leadText)
+      const safeLeadMessage = toSafeCell(leadMessage)
 
       const html = `
         <div style="font-family: Inter, Arial, sans-serif; max-width: 640px; margin: 0 auto; color: #0f172a;">
@@ -242,14 +273,14 @@ export function createMailer(options: MailerOptions) {
           <p style="margin-bottom: 16px; color: #334155;">A visitor message triggered lead capture in your chatbot.</p>
           <table style="border-collapse: collapse; width: 100%; font-size: 14px;">
             <tbody>
-              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Submitted At</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${submittedAtIso}</td></tr>
-              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Business</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${businessName}</td></tr>
-              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Chatbot</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${chatbotName}</td></tr>
-              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Visitor Session</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${visitorId}</td></tr>
-              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Lead Email</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${leadEmail || '-'}</td></tr>
-              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Lead Phone</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${leadPhone || '-'}</td></tr>
-              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Lead Text</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${leadText || '-'}</td></tr>
-              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Raw Message</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${leadMessage}</td></tr>
+              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Submitted At</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${safeSubmittedAt}</td></tr>
+              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Business</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${safeBusinessName}</td></tr>
+              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Chatbot</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${safeChatbotName}</td></tr>
+              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Visitor Session</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${safeVisitorId}</td></tr>
+              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Lead Email</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${safeLeadEmail}</td></tr>
+              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Lead Phone</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${safeLeadPhone}</td></tr>
+              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Lead Text</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${safeLeadText}</td></tr>
+              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Raw Message</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${safeLeadMessage}</td></tr>
             </tbody>
           </table>
         </div>
