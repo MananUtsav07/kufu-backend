@@ -39,15 +39,3 @@ jobs:
 
       - name: Verify schema (offline)
         run: npm run verify-schema:offline
-
-      - name: Verify schema (online, optional)
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-        run: |
-          if [ -n "$SUPABASE_URL" ] && [ -n "$SUPABASE_SERVICE_ROLE_KEY" ]; then
-            echo "Running online schema verification"
-            VERIFY_SCHEMA_MODE=online npm run verify-schema
-          else
-            echo "Skipping online schema verification (missing secrets)"
-          fi
