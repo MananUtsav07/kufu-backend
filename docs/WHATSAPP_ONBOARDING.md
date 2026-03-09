@@ -90,7 +90,7 @@ Public endpoints already used by automation:
 
 ## Database
 
-Migration: `server/supabase/migrations/007_whatsapp_embedded_signup.sql`
+Migration: `supabase/migrations/007_whatsapp_embedded_signup.sql`
 
 Enhancements:
 

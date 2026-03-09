@@ -1,14 +1,14 @@
-﻿import bcrypt from 'bcryptjs'
+import bcrypt from 'bcryptjs'
 import { randomBytes } from 'node:crypto'
 import { Router, type Request, type Response } from 'express'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { rateLimit } from 'express-rate-limit'
 
 import { authMiddleware, type AuthenticatedRequest } from '../lib/auth-middleware.js'
 import { asyncHandler, AppError } from '../lib/errors.js'
 import { respondValidationError } from '../lib/http.js'
 import { signAuthToken } from '../lib/jwt.js'
 import type { createMailer } from '../lib/mailer.js'
+import { createFixedWindowLimiter } from '../lib/rateLimit.js'
 import { normalizeEmail } from '../lib/validation.js'
 import { loginSchema, registerSchema, verifyEmailSchema, authTokenQuerySchema } from '../schemas/auth.js'
 import { writeAuditLog } from '../services/auditService.js'
@@ -32,6 +32,7 @@ type AuthRouterOptions = {
   supabaseAdminClient: SupabaseClient
   mailer: Mailer
   allowDevBypassEmailVerify: boolean
+  authRateLimitPerMinute: number
 }
 
 type VerificationTokenRow = {
@@ -221,15 +222,11 @@ async function verifyTokenAndActivateUser(args: {
 export function createAuthRouter(options: AuthRouterOptions): Router {
   const router = Router()
 
-  const authLimiter = rateLimit({
-    windowMs: 10 * 60 * 1000,
-    max: 25,
-    standardHeaders: true,
-    legacyHeaders: false,
-    message: {
-      ok: false,
-      error: 'Too many auth requests. Please try again later.',
-    },
+  const authLimiter = createFixedWindowLimiter({
+    namespace: 'auth',
+    windowMs: 60 * 1000,
+    max: options.authRateLimitPerMinute,
+    message: 'Too many auth requests. Please try again later.',
   })
 
   router.use(authLimiter)
@@ -473,3 +470,4 @@ export function createAuthRouter(options: AuthRouterOptions): Router {
 
   return router
 }
+

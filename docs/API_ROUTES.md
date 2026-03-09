@@ -2,6 +2,10 @@
 
 Base URL (dev): `http://localhost:8787`
 
+Schema prerequisite:
+- Apply migrations from `supabase/migrations` only.
+- Run `npm run verify-schema` before deploy.
+
 ## Health
 
 ### `GET /api/health`
@@ -617,8 +621,8 @@ Auth: Bearer JWT (admin role only)
 
 ### `GET /api/admin/overview`
 
-### `GET /api/admin/users`
-- Returns all users with current plan and period usage.
+### `GET /api/admin/users?limit=&offset=`
+- Returns paginated users with current plan and period usage.
 - Response:
 ```json
 {
@@ -633,7 +637,8 @@ Auth: Bearer JWT (admin role only)
       "currentPlanCode": "starter",
       "messageUsageThisPeriod": 42
     }
-  ]
+  ],
+  "pagination": { "limit": 50, "offset": 0, "total": 1234 }
 }
 ```
 
@@ -653,7 +658,8 @@ Auth: Bearer JWT (admin role only)
 ### `GET /api/admin/messages/export?limit=&offset=&user_id=&chatbot_id=&from=&to=`
 - CSV download
 
-### `GET /api/admin/tickets`
+### `GET /api/admin/tickets?limit=&offset=&status=`
+- `status` optional: `open | closed`
 
 ### `PATCH /api/admin/tickets/:id`
 - Body:
@@ -661,7 +667,8 @@ Auth: Bearer JWT (admin role only)
 { "status": "closed", "admin_response": "Issue resolved" }
 ```
 
-### `GET /api/admin/quotes`
+### `GET /api/admin/quotes?limit=&offset=&status=`
+- `status` optional: `pending | responded | closed | approved`
 
 ### `PATCH /api/admin/quotes/:id`
 - Body:

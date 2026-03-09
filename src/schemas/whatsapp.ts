@@ -41,3 +41,54 @@ export const whatsappWebhookSubscribeSchema = z
     verifyToken: optionalShortString,
   })
   .strict()
+
+const whatsappWebhookTextMessageSchema = z
+  .object({
+    id: z.string().optional(),
+    from: z.string().trim().min(1),
+    type: z.literal('text'),
+    text: z
+      .object({
+        body: z.string().trim().min(1),
+      })
+      .strict(),
+  })
+  .passthrough()
+
+const whatsappWebhookChangeValueSchema = z
+  .object({
+    metadata: z
+      .object({
+        phone_number_id: z.string().trim().min(1),
+      })
+      .partial()
+      .optional(),
+    messages: z.array(whatsappWebhookTextMessageSchema).optional(),
+  })
+  .passthrough()
+
+export const whatsappWebhookPayloadSchema = z
+  .object({
+    object: z.string().optional(),
+    entry: z
+      .array(
+        z
+          .object({
+            id: z.string().optional(),
+            changes: z
+              .array(
+                z
+                  .object({
+                    field: z.string().optional(),
+                    value: whatsappWebhookChangeValueSchema.optional(),
+                  })
+                  .passthrough(),
+              )
+              .optional(),
+          })
+          .passthrough(),
+      )
+      .optional()
+      .default([]),
+  })
+  .passthrough()

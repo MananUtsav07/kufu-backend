@@ -1,6 +1,7 @@
-﻿import { Router } from 'express'
+import { Router } from 'express'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
+import { TtlCache } from '../lib/cache.js'
 import { asyncHandler, AppError } from '../lib/errors.js'
 import { respondValidationError } from '../lib/http.js'
 import { widgetConfigQuerySchema } from '../schemas/api.js'
@@ -14,6 +15,32 @@ type WidgetRouterOptions = {
   defaultWidgetLogoPath?: string
   defaultWidgetLogoUrl?: string
 }
+
+type WidgetConfigResponse = {
+  ok: true
+  config: {
+    chatbot_id: string
+    client_id: string | null
+    widget_public_key: string
+    name: string
+    business_name: string
+    theme: 'dark'
+    greeting: string
+    primary_color: string
+    logo_url: string
+    allowed_domains: string[]
+  }
+}
+
+const WIDGET_CONFIG_CACHE_TTL_MS = 2 * 60 * 1000
+const WIDGET_SCRIPT_CACHE_TTL_MS = 5 * 60 * 1000
+
+const widgetConfigCache = new TtlCache<string, WidgetConfigResponse>({
+  defaultTtlMs: WIDGET_CONFIG_CACHE_TTL_MS,
+})
+const widgetScriptCache = new TtlCache<string, string>({
+  defaultTtlMs: WIDGET_SCRIPT_CACHE_TTL_MS,
+})
 
 function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/, '')
@@ -91,104 +118,75 @@ async function resolveWidgetLogoUrl(args: {
   return `${trimTrailingSlash(args.frontendUrl)}/favicon-32x32.png`
 }
 
-export function createWidgetApiRouter(options: WidgetRouterOptions): Router {
-  const router = Router()
+async function buildWidgetConfigResponse(options: WidgetRouterOptions, key: string): Promise<WidgetConfigResponse> {
+  const chatbot = await loadChatbotByPublicKey(options.supabaseAdminClient, key)
+  if (!chatbot || !chatbot.is_active) {
+    throw new AppError('Widget key not found or inactive', 404)
+  }
 
-  router.get(
-    '/config',
-    asyncHandler(async (request, response) => {
-      const parsed = widgetConfigQuerySchema.safeParse({
-        key: request.query.key,
-      })
-      if (!parsed.success) {
-        return respondValidationError(parsed.error, response)
-      }
+  const client = chatbot.client_id ? await loadClientById(options.supabaseAdminClient, chatbot.client_id) : null
 
-      const chatbot = await loadChatbotByPublicKey(options.supabaseAdminClient, parsed.data.key)
-      if (!chatbot || !chatbot.is_active) {
-        throw new AppError('Widget key not found or inactive', 404)
-      }
+  const { data: chatbotSettings, error: chatbotSettingsError } = await options.supabaseAdminClient
+    .from('chatbot_settings')
+    .select('bot_name, greeting_message, primary_color')
+    .eq('chatbot_id', chatbot.id)
+    .maybeSingle<{ bot_name: string; greeting_message: string; primary_color: string }>()
 
-      const client = chatbot.client_id
-        ? await loadClientById(options.supabaseAdminClient, chatbot.client_id)
-        : null
+  if (chatbotSettingsError) {
+    throw new AppError('Failed to load chatbot settings for widget', 500, chatbotSettingsError)
+  }
 
-      const { data: chatbotSettings, error: chatbotSettingsError } = await options.supabaseAdminClient
-        .from('chatbot_settings')
-        .select('bot_name, greeting_message, primary_color')
-        .eq('chatbot_id', chatbot.id)
-        .maybeSingle<{ bot_name: string; greeting_message: string; primary_color: string }>()
+  const botName = chatbotSettings?.bot_name?.trim() || chatbot.name
+  const greetingMessage =
+    chatbotSettings?.greeting_message?.trim() ||
+    `Hi, welcome to ${client?.business_name ?? 'Kufu'}. How can we help you today?`
+  const primaryColor = chatbotSettings?.primary_color?.trim() || '#6366f1'
 
-      if (chatbotSettingsError) {
-        throw new AppError('Failed to load chatbot settings for widget', 500, chatbotSettingsError)
-      }
+  const logoUrl = await resolveWidgetLogoUrl({
+    supabaseAdminClient: options.supabaseAdminClient,
+    chatbotLogoPath: chatbot.logo_path,
+    defaultLogoPath: options.defaultWidgetLogoPath,
+    defaultLogoUrl: options.defaultWidgetLogoUrl,
+    frontendUrl: options.frontendUrl,
+  })
 
-      const botName = chatbotSettings?.bot_name?.trim() || chatbot.name
-      const greetingMessage =
-        chatbotSettings?.greeting_message?.trim() ||
-        `Hi, welcome to ${client?.business_name ?? 'Kufu'}. How can we help you today?`
-      const primaryColor = chatbotSettings?.primary_color?.trim() || '#6366f1'
-
-      const logoUrl = await resolveWidgetLogoUrl({
-        supabaseAdminClient: options.supabaseAdminClient,
-        chatbotLogoPath: chatbot.logo_path,
-        defaultLogoPath: options.defaultWidgetLogoPath,
-        defaultLogoUrl: options.defaultWidgetLogoUrl,
-        frontendUrl: options.frontendUrl,
-      })
-
-      response.json({
-        ok: true,
-        config: {
-          chatbot_id: chatbot.id,
-          client_id: chatbot.client_id,
-          widget_public_key: chatbot.widget_public_key,
-          name: botName,
-          business_name: client?.business_name ?? 'Kufu',
-          theme: 'dark',
-          greeting: greetingMessage,
-          primary_color: primaryColor,
-          logo_url: logoUrl,
-          allowed_domains: getSafeDomainList(chatbot),
-        },
-      })
-    }),
-  )
-
-  return router
+  return {
+    ok: true,
+    config: {
+      chatbot_id: chatbot.id,
+      client_id: chatbot.client_id,
+      widget_public_key: chatbot.widget_public_key,
+      name: botName,
+      business_name: client?.business_name ?? 'Kufu',
+      theme: 'dark',
+      greeting: greetingMessage,
+      primary_color: primaryColor,
+      logo_url: logoUrl,
+      allowed_domains: getSafeDomainList(chatbot),
+    },
+  }
 }
 
-export function createWidgetScriptRouter(options: WidgetRouterOptions): Router {
-  const router = Router()
+async function buildWidgetScript(options: WidgetRouterOptions, key: string): Promise<string> {
+  const chatbot = await loadChatbotByPublicKey(options.supabaseAdminClient, key)
+  if (!chatbot || !chatbot.is_active) {
+    throw new AppError('Widget key not found or inactive', 404)
+  }
 
-  router.get(
-    '/kufu.js',
-    asyncHandler(async (request, response) => {
-      const parsed = widgetConfigQuerySchema.safeParse({
-        key: request.query.key,
-      })
-      if (!parsed.success) {
-        return respondValidationError(parsed.error, response)
-      }
+  const frontendBase = trimTrailingSlash(options.frontendUrl)
+  const backendBase = trimTrailingSlash(options.backendBaseUrl)
+  const encodedKey = encodeURIComponent(key)
+  const iframeSource = `${frontendBase}/widget?key=${encodedKey}`
 
-      const chatbot = await loadChatbotByPublicKey(options.supabaseAdminClient, parsed.data.key)
-      if (!chatbot || !chatbot.is_active) {
-        throw new AppError('Widget key not found or inactive', 404)
-      }
+  const bubbleLogoUrl = await resolveWidgetLogoUrl({
+    supabaseAdminClient: options.supabaseAdminClient,
+    chatbotLogoPath: chatbot.logo_path,
+    defaultLogoPath: options.defaultWidgetLogoPath,
+    defaultLogoUrl: options.defaultWidgetLogoUrl,
+    frontendUrl: options.frontendUrl,
+  })
 
-      const frontendBase = trimTrailingSlash(options.frontendUrl)
-      const backendBase = trimTrailingSlash(options.backendBaseUrl)
-      const key = encodeURIComponent(parsed.data.key)
-      const iframeSource = `${frontendBase}/widget?key=${key}`
-      const bubbleLogoUrl = await resolveWidgetLogoUrl({
-        supabaseAdminClient: options.supabaseAdminClient,
-        chatbotLogoPath: chatbot.logo_path,
-        defaultLogoPath: options.defaultWidgetLogoPath,
-        defaultLogoUrl: options.defaultWidgetLogoUrl,
-        frontendUrl: options.frontendUrl,
-      })
-
-      const script = `(function(){
+  return `(function(){
   if (window.__kufuWidgetLoaded) return;
   window.__kufuWidgetLoaded = true;
 
@@ -265,9 +263,55 @@ export function createWidgetScriptRouter(options: WidgetRouterOptions): Router {
   document.body.appendChild(bubble);
   sync();
 
-  console.log('[kufu-widget] loaded', { key: '${key}', backend: '${backendBase}' });
+  console.log('[kufu-widget] loaded', { key: '${encodedKey}', backend: '${backendBase}' });
 })();`
+}
 
+export function createWidgetApiRouter(options: WidgetRouterOptions): Router {
+  const router = Router()
+
+  router.get(
+    '/config',
+    asyncHandler(async (request, response) => {
+      const parsed = widgetConfigQuerySchema.safeParse({
+        key: request.query.key,
+      })
+      if (!parsed.success) {
+        return respondValidationError(parsed.error, response)
+      }
+
+      const key = parsed.data.key
+      const cacheKey = `widget_config:${key}`
+      const payload = await widgetConfigCache.getOrSet(cacheKey, () =>
+        buildWidgetConfigResponse(options, key),
+      )
+
+      response.setHeader('Cache-Control', 'public, max-age=60, stale-while-revalidate=120')
+      response.json(payload)
+    }),
+  )
+
+  return router
+}
+
+export function createWidgetScriptRouter(options: WidgetRouterOptions): Router {
+  const router = Router()
+
+  router.get(
+    '/kufu.js',
+    asyncHandler(async (request, response) => {
+      const parsed = widgetConfigQuerySchema.safeParse({
+        key: request.query.key,
+      })
+      if (!parsed.success) {
+        return respondValidationError(parsed.error, response)
+      }
+
+      const key = parsed.data.key
+      const cacheKey = `widget_script:${key}`
+      const script = await widgetScriptCache.getOrSet(cacheKey, () => buildWidgetScript(options, key))
+
+      response.setHeader('Cache-Control', 'public, max-age=300, stale-while-revalidate=300')
       response.setHeader('Cross-Origin-Resource-Policy', 'cross-origin')
       response.setHeader('Content-Type', 'application/javascript; charset=utf-8')
       response.status(200).send(script)

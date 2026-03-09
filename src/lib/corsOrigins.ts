@@ -1,43 +1,46 @@
 import type { CorsOptions } from 'cors'
+import { logWarn } from './logger.js'
 
-export function isCorsOriginAllowed(origin: string, allowedOrigins: string[]): boolean {
-  return allowedOrigins.some((allowedOrigin) => {
-    if (allowedOrigin === '*') {
-      return true
+function normalizeOrigin(origin: string): string | null {
+  try {
+    const parsed = new URL(origin)
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return null
     }
 
-    if (!allowedOrigin.includes('*')) {
-      return allowedOrigin === origin
-    }
-
-    const wildcardRegex = new RegExp(
-      `^${allowedOrigin.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\\\*/g, '.*')}$`,
-    )
-
-    return wildcardRegex.test(origin)
-  })
+    return `${parsed.protocol}//${parsed.host}`
+  } catch {
+    return null
+  }
 }
 
 export function createCorsOriginHandler(
   allowedOrigins: string[],
   isProduction: boolean,
 ): CorsOptions['origin'] {
+  const allowedOriginSet = new Set(
+    allowedOrigins.map((origin) => normalizeOrigin(origin)).filter((origin): origin is string => Boolean(origin)),
+  )
+
   return (origin, callback) => {
     if (!origin) {
       callback(null, true)
       return
     }
 
-    if (isCorsOriginAllowed(origin, allowedOrigins)) {
+    const normalizedOrigin = normalizeOrigin(origin)
+    if (normalizedOrigin && allowedOriginSet.has(normalizedOrigin)) {
       callback(null, true)
       return
     }
 
     if (!isProduction) {
-      console.warn(`[cors] blocked origin ${origin}`)
+      logWarn({
+        type: 'cors_blocked_origin',
+        origin,
+      })
     }
 
     callback(null, false)
   }
 }
-

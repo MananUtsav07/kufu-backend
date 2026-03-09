@@ -1,16 +1,20 @@
-import { randomBytes } from 'node:crypto'
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import { Router, type Request } from 'express'
 import type OpenAI from 'openai'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
 import { authMiddleware, type AuthenticatedRequest } from '../lib/auth-middleware.js'
 import { asyncHandler, AppError } from '../lib/errors.js'
-import { getTimestamp, respondValidationError } from '../lib/http.js'
+import { getClientIp, getTimestamp, respondValidationError } from '../lib/http.js'
+import { logError } from '../lib/logger.js'
+import { createFixedWindowLimiter } from '../lib/rateLimit.js'
+import { getRequestIdFromRequest } from '../lib/requestContext.js'
 import { buildSystemPrompt } from '../lib/systemPrompt.js'
 import type { DataStore } from '../lib/dataStore.js'
 import {
   whatsappOnboardingCompleteSchema,
   whatsappOnboardingStartSchema,
+  whatsappWebhookPayloadSchema,
   whatsappWebhookSubscribeSchema,
 } from '../schemas/whatsapp.js'
 import { retrieveRelevantChunks } from '../rag/retrieval.js'
@@ -66,6 +70,8 @@ type WhatsAppRouterOptions = {
   metaGraphApiVersion: string
   metaRedirectUri: string
   metaEmbeddedSignupConfigId: string
+  webhookAllowedIps: string[]
+  webhookRateLimitPerMinute: number
 }
 
 type IncomingWhatsAppTextEvent = {
@@ -73,6 +79,10 @@ type IncomingWhatsAppTextEvent = {
   from: string
   messageId: string | null
   text: string
+}
+
+type RequestWithRawBody = Request & {
+  rawBody?: Buffer
 }
 
 function asAuthenticatedRequest(request: unknown): AuthenticatedRequest {
@@ -111,6 +121,54 @@ function getQueryValue(query: Request['query'], key: string): string | null {
     return value[0]
   }
   return null
+}
+
+function isHexString(value: string): boolean {
+  return /^[a-f0-9]+$/i.test(value)
+}
+
+function assertWebhookSourceAllowed(request: Request, allowedIps: string[]): void {
+  if (allowedIps.length === 0) {
+    return
+  }
+
+  const requestIp = getClientIp(request)
+  if (!allowedIps.includes(requestIp)) {
+    throw new AppError('Webhook source is not allowed', 403)
+  }
+}
+
+function assertWebhookSignature(request: Request, appSecret: string): void {
+  if (!appSecret) {
+    return
+  }
+
+  const signatureHeader = request.header('x-hub-signature-256')?.trim()
+  if (!signatureHeader || !signatureHeader.startsWith('sha256=')) {
+    throw new AppError('Invalid webhook signature', 401)
+  }
+
+  const providedSignature = signatureHeader.slice('sha256='.length)
+  if (!providedSignature || !isHexString(providedSignature) || providedSignature.length % 2 !== 0) {
+    throw new AppError('Invalid webhook signature', 401)
+  }
+
+  const rawBody = (request as RequestWithRawBody).rawBody
+  if (!rawBody || rawBody.length === 0) {
+    throw new AppError('Invalid webhook payload signature', 401)
+  }
+
+  const expectedSignature = createHmac('sha256', appSecret).update(rawBody).digest('hex')
+  const providedBuffer = Buffer.from(providedSignature, 'hex')
+  const expectedBuffer = Buffer.from(expectedSignature, 'hex')
+
+  if (providedBuffer.length !== expectedBuffer.length) {
+    throw new AppError('Invalid webhook signature', 401)
+  }
+
+  if (!timingSafeEqual(providedBuffer, expectedBuffer)) {
+    throw new AppError('Invalid webhook signature', 401)
+  }
 }
 
 function toIntegrationPayload(integration: WhatsAppIntegrationRow | null) {
@@ -152,14 +210,11 @@ async function safeAppendOnboardingLog(
   try {
     await appendWhatsAppOnboardingLog(supabaseAdminClient, args)
   } catch (error) {
-    console.error(
-      JSON.stringify({
-        level: 'error',
-        type: 'whatsapp_onboarding_log_failed',
-        eventType: args.eventType,
-        reason: error instanceof Error ? error.message : 'Unknown onboarding log failure',
-      }),
-    )
+    logError({
+      type: 'whatsapp_onboarding_log_failed',
+      eventType: args.eventType,
+      message: error instanceof Error ? error.message : 'Unknown onboarding log failure',
+    })
   }
 }
 
@@ -473,6 +528,12 @@ async function processIncomingTextEvent(args: {
 
 export function createWhatsAppRouter(options: WhatsAppRouterOptions): Router {
   const router = Router()
+  const webhookLimiter = createFixedWindowLimiter({
+    namespace: 'webhook',
+    windowMs: 60 * 1000,
+    max: options.webhookRateLimitPerMinute,
+    message: 'Too many webhook requests. Please try again later.',
+  })
 
   router.get(
     '/callback',
@@ -880,7 +941,10 @@ export function createWhatsAppRouter(options: WhatsAppRouterOptions): Router {
 
   router.get(
     '/webhook',
+    webhookLimiter,
     asyncHandler(async (request, response) => {
+      assertWebhookSourceAllowed(request, options.webhookAllowedIps)
+
       const mode = getQueryValue(request.query, 'hub.mode')
       const verifyToken = getQueryValue(request.query, 'hub.verify_token')
       const challenge = getQueryValue(request.query, 'hub.challenge')
@@ -913,8 +977,17 @@ export function createWhatsAppRouter(options: WhatsAppRouterOptions): Router {
 
   router.post(
     '/webhook',
+    webhookLimiter,
     asyncHandler(async (request, response) => {
-      const events = extractIncomingTextEvents(request.body)
+      assertWebhookSourceAllowed(request, options.webhookAllowedIps)
+      assertWebhookSignature(request, options.metaAppSecret)
+
+      const parsedPayload = whatsappWebhookPayloadSchema.safeParse(request.body)
+      if (!parsedPayload.success) {
+        return respondValidationError(parsedPayload.error, response)
+      }
+
+      const events = extractIncomingTextEvents(parsedPayload.data)
       const errors: Array<{ phoneNumberId: string; from: string; reason: string }> = []
 
       for (const event of events) {
@@ -933,14 +1006,13 @@ export function createWhatsAppRouter(options: WhatsAppRouterOptions): Router {
       }
 
       if (errors.length > 0) {
-        console.error(
-          JSON.stringify({
-            level: 'error',
-            type: 'whatsapp_webhook_processing_failed',
-            count: errors.length,
-            errors,
-          }),
-        )
+        logError({
+          type: 'whatsapp_webhook_processing_failed',
+          requestId: getRequestIdFromRequest(request),
+          path: '/api/whatsapp/webhook',
+          count: errors.length,
+          errors,
+        })
       }
 
       response.json({

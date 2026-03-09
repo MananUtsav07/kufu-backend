@@ -1,5 +1,8 @@
-﻿import { randomUUID } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 import type { NextFunction, Request, Response } from 'express'
+
+import type { AuthenticatedRequest } from './auth-middleware.js'
+import { logInfo } from './logger.js'
 
 export type RequestWithContext = Request & {
   requestId?: string
@@ -11,6 +14,15 @@ function getClientAddress(request: Request): string {
     return forwarded.split(',')[0]?.trim() || 'unknown'
   }
   return request.ip || request.socket.remoteAddress || 'unknown'
+}
+
+export function getRequestIdFromRequest(request: Request): string {
+  return (request as RequestWithContext).requestId || 'unknown'
+}
+
+export function getRequestIdFromResponse(response: Response): string {
+  const requestIdHeader = response.getHeader('x-request-id')
+  return typeof requestIdHeader === 'string' ? requestIdHeader : 'unknown'
 }
 
 export function requestContextMiddleware(request: Request, response: Response, next: NextFunction) {
@@ -25,18 +37,20 @@ export function requestContextMiddleware(request: Request, response: Response, n
     }
 
     const durationMs = Date.now() - startedAt
-    const logPayload = {
-      level: 'info',
+    const requestUser = request as Partial<AuthenticatedRequest>
+    const userId = typeof requestUser.user?.userId === 'string' ? requestUser.user.userId : null
+
+    logInfo({
       type: 'request',
       requestId,
       method: request.method,
+      route: request.path,
       path: request.originalUrl,
+      userId,
       statusCode: response.statusCode,
       durationMs,
       ip: getClientAddress(request),
-    }
-
-    console.log(JSON.stringify(logPayload))
+    })
   })
 
   next()

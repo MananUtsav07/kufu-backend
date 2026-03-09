@@ -1,4 +1,9 @@
-﻿import { z } from 'zod'
+import { z } from 'zod'
+
+export const adminListQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+  offset: z.coerce.number().int().min(0).default(0),
+})
 
 export const adminMessagesQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(500).default(100),
@@ -7,6 +12,14 @@ export const adminMessagesQuerySchema = z.object({
   chatbot_id: z.string().uuid().optional(),
   from: z.string().datetime().optional(),
   to: z.string().datetime().optional(),
+})
+
+export const adminTicketsQuerySchema = adminListQuerySchema.extend({
+  status: z.enum(['open', 'closed']).optional(),
+})
+
+export const adminQuotesQuerySchema = adminListQuerySchema.extend({
+  status: z.enum(['pending', 'responded', 'closed', 'approved']).optional(),
 })
 
 export const adminTicketPatchSchema = z

@@ -10,7 +10,9 @@ import {
   hashIp,
   respondValidationError,
 } from "../lib/http.js";
-import { createInMemoryLimiter } from "../lib/rateLimit.js";
+import { logError } from "../lib/logger.js";
+import { createFixedWindowLimiter } from "../lib/rateLimit.js";
+import { getRequestIdFromRequest } from "../lib/requestContext.js";
 import { sanitizeMessages } from "../lib/sanitizeMessages.js";
 import { buildSystemPrompt } from "../lib/systemPrompt.js";
 import type { createMailer } from "../lib/mailer.js";
@@ -25,7 +27,6 @@ import {
 import {
   enforcePlanMessageLimit,
   incrementSubscriptionUsage,
-  loadPlanByCode,
   type PlanRow,
   type SubscriptionRow,
 } from "../services/subscriptionService.js";
@@ -57,6 +58,7 @@ type ChatRouterOptions = {
   supabaseAdminClient: SupabaseClient;
   dataStore: DataStore;
   mailer: ReturnType<typeof createMailer>;
+  chatRateLimitPerMinute: number;
 };
 
 type ChatContext = {
@@ -226,15 +228,6 @@ async function resolveChatContext(
       ? chatbot.allowed_domains
       : [];
 
-    console.log("[domain-check] origin:", request.header("origin"));
-    console.log("[domain-check] referer:", request.header("referer"));
-    console.log("[domain-check] requestDomain:", requestDomain);
-    console.log("[domain-check] allowedDomains:", allowedDomains);
-    console.log(
-      "[domain-check] allowed:",
-      isDomainAllowed(requestDomain, allowedDomains),
-    );
-
     if (!isDomainAllowed(requestDomain, allowedDomains)) {
       throw new AppError("Widget origin is not allowed", 403);
     }
@@ -280,27 +273,26 @@ async function resolveChatContext(
   };
 }
 
-function requireLimitAllowed(planCheck: { allowed: boolean; reason?: string }) {
-  if (!planCheck.allowed) {
-    throw new AppError(planCheck.reason || "Usage limit reached", 403);
-  }
-}
-
 export function createChatRouter(options: ChatRouterOptions): Router {
   const router = Router();
 
-  const chatLimiter = createInMemoryLimiter({
-    windowMs: 10 * 60 * 1000,
-    max: 60,
+  const chatLimiter = createFixedWindowLimiter({
+    namespace: "chat",
+    windowMs: 60 * 1000,
+    max: options.chatRateLimitPerMinute,
     keyGenerator: (request) => {
       const ip = getClientIp(request);
+      const sessionFromBody =
+        typeof (request.body as { sessionId?: unknown })?.sessionId === "string"
+          ? ((request.body as { sessionId?: string }).sessionId ?? "")
+          : "";
       const keyFromQuery =
         typeof request.query.key === "string" ? request.query.key : "";
       const keyFromBody =
         typeof (request.body as { key?: unknown })?.key === "string"
           ? ((request.body as { key?: string }).key ?? "")
           : "";
-      return `${ip}:${keyFromBody || keyFromQuery || "no-key"}`;
+      return `${ip}:${sessionFromBody || keyFromBody || keyFromQuery || "no-key"}`;
     },
     message: "Too many chat requests. Please try again later.",
   });
@@ -327,17 +319,6 @@ export function createChatRouter(options: ChatRouterOptions): Router {
       }
 
       const context = await resolveChatContext(request, parsed.data, options);
-
-      if (context.userId && context.userRole !== "admin") {
-        const usage = await enforcePlanMessageLimit(
-          options.supabaseAdminClient,
-          context.userId,
-          context.userRole,
-        );
-        requireLimitAllowed(usage);
-        context.plan = usage.plan;
-        context.subscription = usage.subscription;
-      }
 
       const shouldUseGlobalKnowledge =
         context.userRole === "admin" &&
@@ -473,12 +454,6 @@ export function createChatRouter(options: ChatRouterOptions): Router {
           1,
         );
         context.subscription = updatedSubscription;
-        if (context.plan) {
-          context.plan = await loadPlanByCode(
-            options.supabaseAdminClient,
-            updatedSubscription.plan_code,
-          );
-        }
       }
 
       let leadCaptured = false;
@@ -525,18 +500,16 @@ export function createChatRouter(options: ChatRouterOptions): Router {
               userMessage: lastUserMessage,
             });
           } catch (notificationError) {
-            console.error(
-              JSON.stringify({
-                level: "error",
-                type: "new_chat_notification_failed",
-                path: "/api/chat",
-                chatbotId: context.chatbotId,
-                message:
-                  notificationError instanceof Error
-                    ? notificationError.message
-                    : "Unknown notification error",
-              }),
-            );
+            logError({
+              type: "new_chat_notification_failed",
+              requestId: getRequestIdFromRequest(request),
+              path: "/api/chat",
+              chatbotId: context.chatbotId,
+              message:
+                notificationError instanceof Error
+                  ? notificationError.message
+                  : "Unknown notification error",
+            });
           }
         }
 
@@ -550,18 +523,16 @@ export function createChatRouter(options: ChatRouterOptions): Router {
               userMessage: lastUserMessage,
             });
           } catch (notificationError) {
-            console.error(
-              JSON.stringify({
-                level: "error",
-                type: "lead_capture_notification_failed",
-                path: "/api/chat",
-                chatbotId: context.chatbotId,
-                message:
-                  notificationError instanceof Error
-                    ? notificationError.message
-                    : "Unknown notification error",
-              }),
-            );
+            logError({
+              type: "lead_capture_notification_failed",
+              requestId: getRequestIdFromRequest(request),
+              path: "/api/chat",
+              chatbotId: context.chatbotId,
+              message:
+                notificationError instanceof Error
+                  ? notificationError.message
+                  : "Unknown notification error",
+            });
           }
         }
       }

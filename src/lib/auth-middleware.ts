@@ -1,7 +1,9 @@
-﻿import type { NextFunction, Request, Response } from 'express'
+import type { NextFunction, Request, Response } from 'express'
+
 import type { RequestUser } from '../types/auth.js'
-import { verifyAuthToken } from './jwt.js'
 import { AppError } from './errors.js'
+import { sendApiError } from './http.js'
+import { verifyAuthToken } from './jwt.js'
 
 export type AuthenticatedRequest = Request & {
   user: RequestUser
@@ -52,19 +54,13 @@ export function getOptionalRequestUser(request: Request, jwtSecret: string): Req
 export function authMiddleware(jwtSecret: string) {
   return (request: Request, response: Response, next: NextFunction) => {
     if (!jwtSecret) {
-      response.status(500).json({
-        ok: false,
-        error: 'Server auth configuration missing: JWT_SECRET',
-      })
+      sendApiError(response, 500, 'Server auth configuration missing: JWT_SECRET')
       return
     }
 
     const requestUser = getOptionalRequestUser(request, jwtSecret)
     if (!requestUser) {
-      response.status(401).json({
-        ok: false,
-        error: 'Unauthorized',
-      })
+      sendApiError(response, 401, 'Unauthorized')
       return
     }
 

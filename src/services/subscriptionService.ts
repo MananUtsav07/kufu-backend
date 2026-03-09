@@ -1,4 +1,5 @@
-﻿import type { SupabaseClient } from '@supabase/supabase-js'
+import type { SupabaseClient } from '@supabase/supabase-js'
+import { TtlCache } from '../lib/cache.js'
 import { AppError } from '../lib/errors.js'
 import type { UserRole } from '../types/auth.js'
 
@@ -27,6 +28,8 @@ export type SubscriptionRow = {
 
 const DEFAULT_SUBSCRIPTION_STATUS = 'active'
 const ROLLING_PERIOD_DAYS = 30
+const PLAN_CACHE_TTL_MS = 5 * 60 * 1000
+const planCache = new TtlCache<string, PlanRow>({ defaultTtlMs: PLAN_CACHE_TTL_MS })
 
 function createPeriodWindow(now = new Date()): { start: string; end: string } {
   const periodStart = now
@@ -42,22 +45,29 @@ export async function loadPlanByCode(
   supabaseAdminClient: SupabaseClient,
   planCode: string,
 ): Promise<PlanRow> {
-  const { data, error } = await supabaseAdminClient
-    .from('plans')
-    .select('id, code, name, monthly_message_cap, chatbot_limit, price_inr, is_active')
-    .eq('code', planCode)
-    .eq('is_active', true)
-    .maybeSingle<PlanRow>()
-
-  if (error) {
-    throw new AppError(`Failed to load plan: ${error.message}`, 500)
+  const cacheKey = planCode.trim().toLowerCase()
+  if (!cacheKey) {
+    throw new AppError('Plan code is required', 500)
   }
 
-  if (!data) {
-    throw new AppError(`Plan not found: ${planCode}`, 500)
-  }
+  return planCache.getOrSet(cacheKey, async () => {
+    const { data, error } = await supabaseAdminClient
+      .from('plans')
+      .select('id, code, name, monthly_message_cap, chatbot_limit, price_inr, is_active')
+      .eq('code', cacheKey)
+      .eq('is_active', true)
+      .maybeSingle<PlanRow>()
 
-  return data
+    if (error) {
+      throw new AppError(`Failed to load plan: ${error.message}`, 500)
+    }
+
+    if (!data) {
+      throw new AppError(`Plan not found: ${cacheKey}`, 500)
+    }
+
+    return data
+  })
 }
 
 export async function ensureSubscription(
@@ -195,48 +205,47 @@ export async function enforcePlanMessageLimit(
   }
 
   const subscription = await ensureSubscription(supabaseAdminClient, userId)
-  const rolledSubscription = await rollSubscriptionPeriodIfNeeded(supabaseAdminClient, subscription)
-  const plan = await loadPlanByCode(supabaseAdminClient, rolledSubscription.plan_code)
+  const plan = await loadPlanByCode(supabaseAdminClient, subscription.plan_code)
 
   if (plan.code === 'business') {
     return {
       allowed: true,
       plan,
-      subscription: rolledSubscription,
+      subscription,
     }
   }
 
   if (plan.code === 'free') {
-    if (rolledSubscription.total_message_count >= 10) {
+    if (subscription.total_message_count >= 10) {
       return {
         allowed: false,
         reason: 'Free plan lifetime cap reached (10 messages). Please request an upgrade.',
         plan,
-        subscription: rolledSubscription,
+        subscription,
       }
     }
 
     return {
       allowed: true,
       plan,
-      subscription: rolledSubscription,
+      subscription,
     }
   }
 
   const cap = plan.monthly_message_cap
-  if (cap !== null && rolledSubscription.message_count_in_period >= cap) {
+  if (cap !== null && subscription.message_count_in_period >= cap) {
     return {
       allowed: false,
       reason: `${plan.name} monthly cap reached (${cap} messages). Please request an upgrade.`,
       plan,
-      subscription: rolledSubscription,
+      subscription,
     }
   }
 
   return {
     allowed: true,
     plan,
-    subscription: rolledSubscription,
+    subscription,
   }
 }
 
@@ -284,13 +293,12 @@ export async function getUserPlanContext(
   }
 
   const subscription = await ensureSubscription(supabaseAdminClient, userId)
-  const rolledSubscription = await rollSubscriptionPeriodIfNeeded(supabaseAdminClient, subscription)
-  const plan = await loadPlanByCode(supabaseAdminClient, rolledSubscription.plan_code)
+  const plan = await loadPlanByCode(supabaseAdminClient, subscription.plan_code)
 
   return {
     role,
     plan,
-    subscription: rolledSubscription,
+    subscription,
     planCode: plan.code,
     isStarterPlus: isStarterPlusPlan(plan.code, role),
   }
@@ -302,11 +310,7 @@ export async function setSubscriptionPlan(
   planCode: string,
 ): Promise<SubscriptionRow> {
   await loadPlanByCode(supabaseAdminClient, planCode)
-  const existingSubscription = await ensureSubscription(supabaseAdminClient, userId)
-  const currentSubscription = await rollSubscriptionPeriodIfNeeded(
-    supabaseAdminClient,
-    existingSubscription,
-  )
+  const currentSubscription = await ensureSubscription(supabaseAdminClient, userId)
 
   const { data: updatedSubscription, error: updateError } = await supabaseAdminClient
     .from('subscriptions')

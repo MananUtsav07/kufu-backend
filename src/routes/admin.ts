@@ -5,9 +5,12 @@ import { authMiddleware, requireAdmin, type AuthenticatedRequest } from '../lib/
 import { asyncHandler, AppError } from '../lib/errors.js'
 import { respondValidationError } from '../lib/http.js'
 import {
+  adminListQuerySchema,
   adminMessagesQuerySchema,
+  adminQuotesQuerySchema,
   adminQuotePatchSchema,
   adminSetPlanSchema,
+  adminTicketsQuerySchema,
   adminTicketPatchSchema,
   adminUserPlanUpdateSchema,
 } from '../schemas/admin.js'
@@ -83,22 +86,36 @@ export function createAdminRouter(options: AdminRouterOptions): Router {
 
   router.get(
     '/users',
-    asyncHandler(async (_request, response) => {
-      const [{ data: users, error: usersError }, { data: subscriptions, error: subscriptionsError }] =
-        await Promise.all([
-          options.supabaseAdminClient
-            .from('users')
-            .select('id, email, role, is_verified, created_at')
-            .order('created_at', { ascending: false })
-            .returns<AdminUserRow[]>(),
-          options.supabaseAdminClient
+    asyncHandler(async (request, response) => {
+      const parsedQuery = adminListQuerySchema.safeParse(request.query)
+      if (!parsedQuery.success) {
+        return respondValidationError(parsedQuery.error, response)
+      }
+
+      const { limit, offset } = parsedQuery.data
+
+      const { data: users, count: usersCount, error: usersError } = await options.supabaseAdminClient
+        .from('users')
+        .select('id, email, role, is_verified, created_at', { count: 'exact' })
+        .order('created_at', { ascending: false })
+        .range(offset, offset + limit - 1)
+        .returns<AdminUserRow[]>()
+
+      if (usersError) {
+        throw new AppError('Failed to load users list', 500, usersError)
+      }
+
+      const userIds = (users ?? []).map((user) => user.id)
+      const { data: subscriptions, error: subscriptionsError } = userIds.length
+        ? await options.supabaseAdminClient
             .from('subscriptions')
             .select('user_id, plan_code, message_count_in_period, current_period_end, status')
-            .returns<AdminSubscriptionRow[]>(),
-        ])
+            .in('user_id', userIds)
+            .returns<AdminSubscriptionRow[]>()
+        : { data: [], error: null }
 
-      if (usersError || subscriptionsError) {
-        throw new AppError('Failed to load users list', 500, usersError ?? subscriptionsError)
+      if (subscriptionsError) {
+        throw new AppError('Failed to load users subscriptions', 500, subscriptionsError)
       }
 
       const subscriptionByUserId = new Map<string, AdminSubscriptionRow>()
@@ -130,6 +147,11 @@ export function createAdminRouter(options: AdminRouterOptions): Router {
       response.json({
         ok: true,
         users: items,
+        pagination: {
+          limit,
+          offset,
+          total: usersCount ?? 0,
+        },
       })
     }),
   )
@@ -305,17 +327,40 @@ export function createAdminRouter(options: AdminRouterOptions): Router {
 
   router.get(
     '/tickets',
-    asyncHandler(async (_request, response) => {
-      const { data, error } = await options.supabaseAdminClient
+    asyncHandler(async (request, response) => {
+      const parsedQuery = adminTicketsQuerySchema.safeParse(request.query)
+      if (!parsedQuery.success) {
+        return respondValidationError(parsedQuery.error, response)
+      }
+
+      const { limit, offset, status } = parsedQuery.data
+      let query = options.supabaseAdminClient
         .from('tickets')
-        .select('id, user_id, subject, message, admin_response, status, created_at, updated_at')
+        .select('id, user_id, subject, message, admin_response, status, created_at, updated_at', {
+          count: 'exact',
+        })
         .order('created_at', { ascending: false })
+        .range(offset, offset + limit - 1)
+
+      if (status) {
+        query = query.eq('status', status)
+      }
+
+      const { data, count, error } = await query
 
       if (error) {
         throw new AppError('Failed to load tickets', 500, error)
       }
 
-      response.json({ ok: true, tickets: data ?? [] })
+      response.json({
+        ok: true,
+        tickets: data ?? [],
+        pagination: {
+          limit,
+          offset,
+          total: count ?? 0,
+        },
+      })
     }),
   )
 
@@ -366,19 +411,41 @@ export function createAdminRouter(options: AdminRouterOptions): Router {
 
   router.get(
     '/quotes',
-    asyncHandler(async (_request, response) => {
-      const { data, error } = await options.supabaseAdminClient
+    asyncHandler(async (request, response) => {
+      const parsedQuery = adminQuotesQuerySchema.safeParse(request.query)
+      if (!parsedQuery.success) {
+        return respondValidationError(parsedQuery.error, response)
+      }
+
+      const { limit, offset, status } = parsedQuery.data
+      let query = options.supabaseAdminClient
         .from('custom_quotes')
         .select(
           'id, user_id, requested_plan, requested_chatbots, requested_monthly_messages, requested_unlimited_messages, notes, status, admin_response, created_at, updated_at',
+          { count: 'exact' },
         )
         .order('created_at', { ascending: false })
+        .range(offset, offset + limit - 1)
+
+      if (status) {
+        query = query.eq('status', status)
+      }
+
+      const { data, count, error } = await query
 
       if (error) {
         throw new AppError('Failed to load quote requests', 500, error)
       }
 
-      response.json({ ok: true, quotes: data ?? [] })
+      response.json({
+        ok: true,
+        quotes: data ?? [],
+        pagination: {
+          limit,
+          offset,
+          total: count ?? 0,
+        },
+      })
     }),
   )
 

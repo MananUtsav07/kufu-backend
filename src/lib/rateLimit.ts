@@ -1,15 +1,19 @@
-﻿import type { NextFunction, Request, Response } from 'express'
+import type { NextFunction, Request, Response } from 'express'
 
-export function createInMemoryLimiter(options: {
+import { getClientIp, sendApiError } from './http.js'
+
+type RateLimiterOptions = {
   windowMs: number
   max: number
-  keyGenerator: (request: Request) => string
   message: string
-}) {
+  keyGenerator?: (request: Request) => string
+}
+
+export function createInMemoryLimiter(options: RateLimiterOptions) {
   const store = new Map<string, { count: number; resetAt: number }>()
 
   return (request: Request, response: Response, next: NextFunction) => {
-    const key = options.keyGenerator(request)
+    const key = options.keyGenerator?.(request) ?? getClientIp(request)
     const now = Date.now()
     const existing = store.get(key)
 
@@ -23,10 +27,7 @@ export function createInMemoryLimiter(options: {
     }
 
     if (existing.count >= options.max) {
-      response.status(429).json({
-        ok: false,
-        error: options.message,
-      })
+      sendApiError(response, 429, options.message)
       return
     }
 
@@ -36,10 +37,26 @@ export function createInMemoryLimiter(options: {
   }
 }
 
+export function createFixedWindowLimiter(options: {
+  namespace: string
+  windowMs: number
+  max: number
+  message: string
+  keyGenerator?: (request: Request) => string
+}) {
+  const keyPrefix = options.namespace.trim() || 'ratelimit'
+
+  return createInMemoryLimiter({
+    windowMs: options.windowMs,
+    max: options.max,
+    message: options.message,
+    keyGenerator: (request) => {
+      const key = options.keyGenerator?.(request) ?? getClientIp(request)
+      return `${keyPrefix}:${key}`
+    },
+  })
+}
+
 export function getRequestIp(request: Request): string {
-  const forwarded = request.header('x-forwarded-for')
-  if (forwarded) {
-    return forwarded.split(',')[0]?.trim() || 'unknown'
-  }
-  return request.ip || request.socket.remoteAddress || 'unknown'
+  return getClientIp(request)
 }
