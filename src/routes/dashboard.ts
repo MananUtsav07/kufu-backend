@@ -199,6 +199,24 @@ function toBooleanLeadFilter(
   return undefined;
 }
 
+async function loadOwnedClientIds(
+  supabaseAdminClient: SupabaseClient,
+  userId: string,
+): Promise<string[]> {
+  const { data, error } = await supabaseAdminClient
+    .from("clients")
+    .select("id")
+    .eq("user_id", userId);
+
+  if (error) {
+    throw new AppError("Failed to load client ownership", 500, error);
+  }
+
+  return (data ?? [])
+    .map((row) => (typeof row.id === "string" ? row.id : null))
+    .filter((value): value is string => Boolean(value));
+}
+
 function assertProOrBusinessAccess(params: {
   role: AuthenticatedRequest["user"]["role"];
   planCode: string;
@@ -1922,13 +1940,23 @@ export function createDashboardRouter(options: DashboardRouterOptions): Router {
       }
 
       const authRequest = asAuthenticatedRequest(request);
-      const client = await ensureTenantOwnership(
+      const ownedClientIds = await loadOwnedClientIds(
         options.supabaseAdminClient,
         authRequest.user.userId,
-        authRequest.user.clientId,
       );
 
       const { limit, offset, status } = parsedQuery.data;
+      if (ownedClientIds.length === 0) {
+        return response.json({
+          ok: true,
+          leads: [],
+          pagination: {
+            limit,
+            offset,
+            total: 0,
+          },
+        });
+      }
 
       let query = options.supabaseAdminClient
         .from("leads")
@@ -1936,7 +1964,7 @@ export function createDashboardRouter(options: DashboardRouterOptions): Router {
           "id, client_id, name, email, phone, need, status, source, created_at",
           { count: "exact" },
         )
-        .eq("client_id", client.id)
+        .in("client_id", ownedClientIds)
         .order("created_at", { ascending: false })
         .range(offset, offset + limit - 1);
 
@@ -1975,17 +2003,19 @@ export function createDashboardRouter(options: DashboardRouterOptions): Router {
       }
 
       const authRequest = asAuthenticatedRequest(request);
-      const client = await ensureTenantOwnership(
+      const ownedClientIds = await loadOwnedClientIds(
         options.supabaseAdminClient,
         authRequest.user.userId,
-        authRequest.user.clientId,
       );
+      if (ownedClientIds.length === 0) {
+        throw new AppError("Lead not found", 404);
+      }
 
       const { data, error } = await options.supabaseAdminClient
         .from("leads")
         .update({ status: parsed.data.status })
         .eq("id", leadId)
-        .eq("client_id", client.id)
+        .in("client_id", ownedClientIds)
         .select(
           "id, client_id, name, email, phone, need, status, source, created_at",
         )

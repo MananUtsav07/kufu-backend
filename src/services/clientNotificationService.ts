@@ -69,6 +69,9 @@ export async function notifyClientOnLeadCapture(args: {
   chatbotId: string
   visitorId: string
   userMessage: string
+  leadEmail?: string | null
+  leadPhone?: string | null
+  leadText?: string | null
 }): Promise<void> {
   if (!args.mailer) {
     return
@@ -89,6 +92,9 @@ export async function notifyClientOnLeadCapture(args: {
     chatbotName: notificationContext.chatbotName,
     businessName: notificationContext.businessName,
     visitorId: args.visitorId,
+    leadEmail: args.leadEmail ?? null,
+    leadPhone: args.leadPhone ?? null,
+    leadText: args.leadText ?? null,
     leadMessage: args.userMessage,
   })
 }

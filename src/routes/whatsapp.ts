@@ -492,13 +492,21 @@ async function processIncomingTextEvent(args: {
     )
   }
 
-  const leadCaptured = integration.client_id
+  const leadCaptureResult = integration.client_id
     ? await upsertLeadFromMessage(options.supabaseAdminClient, {
         clientId: integration.client_id,
         content: event.text,
         sessionId,
       })
-    : false
+    : {
+        captured: false,
+        email: null,
+        phone: null,
+        leadText: null,
+        hasDemoIntent: false,
+      }
+
+  const leadCaptured = leadCaptureResult.captured
 
   await insertChatHistoryRow({
     supabaseAdminClient: options.supabaseAdminClient,

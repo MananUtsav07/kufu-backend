@@ -47,6 +47,9 @@ type ClientLeadCaptureNotificationPayload = {
   chatbotName: string
   businessName: string
   visitorId: string
+  leadEmail: string | null
+  leadPhone: string | null
+  leadText: string | null
   leadMessage: string
 }
 
@@ -231,7 +234,7 @@ export function createMailer(options: MailerOptions) {
       )
     },
     async sendClientLeadCaptureNotification(payload: ClientLeadCaptureNotificationPayload): Promise<void> {
-      const { to, submittedAtIso, chatbotName, businessName, visitorId, leadMessage } = payload
+      const { to, submittedAtIso, chatbotName, businessName, visitorId, leadEmail, leadPhone, leadText, leadMessage } = payload
 
       const html = `
         <div style="font-family: Inter, Arial, sans-serif; max-width: 640px; margin: 0 auto; color: #0f172a;">
@@ -243,7 +246,10 @@ export function createMailer(options: MailerOptions) {
               <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Business</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${businessName}</td></tr>
               <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Chatbot</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${chatbotName}</td></tr>
               <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Visitor Session</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${visitorId}</td></tr>
-              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Lead Message</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${leadMessage}</td></tr>
+              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Lead Email</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${leadEmail || '-'}</td></tr>
+              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Lead Phone</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${leadPhone || '-'}</td></tr>
+              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Lead Text</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${leadText || '-'}</td></tr>
+              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Raw Message</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${leadMessage}</td></tr>
             </tbody>
           </table>
         </div>
@@ -262,7 +268,10 @@ export function createMailer(options: MailerOptions) {
             `Business: ${businessName}`,
             `Chatbot: ${chatbotName}`,
             `Visitor Session: ${visitorId}`,
-            `Lead Message: ${leadMessage}`,
+            `Lead Email: ${leadEmail || '-'}`,
+            `Lead Phone: ${leadPhone || '-'}`,
+            `Lead Text: ${leadText || '-'}`,
+            `Raw Message: ${leadMessage}`,
           ].join('\n'),
         },
         {

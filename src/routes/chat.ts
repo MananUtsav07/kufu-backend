@@ -457,12 +457,22 @@ export function createChatRouter(options: ChatRouterOptions): Router {
       }
 
       let leadCaptured = false;
+      let capturedLeadEmail: string | null = null;
+      let capturedLeadPhone: string | null = null;
+      let capturedLeadText: string | null = null;
       if (context.clientId) {
-        leadCaptured = await upsertLeadFromMessage(options.supabaseAdminClient, {
+        const leadCaptureResult = await upsertLeadFromMessage(
+          options.supabaseAdminClient,
+          {
           clientId: context.clientId,
           content: lastUserMessage,
           sessionId,
-        });
+          },
+        );
+        leadCaptured = leadCaptureResult.captured;
+        capturedLeadEmail = leadCaptureResult.email;
+        capturedLeadPhone = leadCaptureResult.phone;
+        capturedLeadText = leadCaptureResult.leadText;
       }
 
       if (context.mode === "widget" && context.chatbotId) {
@@ -521,6 +531,9 @@ export function createChatRouter(options: ChatRouterOptions): Router {
               chatbotId: context.chatbotId,
               visitorId: sessionId,
               userMessage: lastUserMessage,
+              leadEmail: capturedLeadEmail,
+              leadPhone: capturedLeadPhone,
+              leadText: capturedLeadText,
             });
           } catch (notificationError) {
             logError({

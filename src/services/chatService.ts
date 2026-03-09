@@ -20,6 +20,14 @@ export type LeadCaptureInput = {
   sessionId: string
 }
 
+export type LeadCaptureResult = {
+  captured: boolean
+  email: string | null
+  phone: string | null
+  leadText: string | null
+  hasDemoIntent: boolean
+}
+
 export function estimateTokens(content: string): number {
   if (!content) {
     return 0
@@ -110,17 +118,41 @@ function normalizePhone(value: string): string {
   return value.replace(/[^\d+]/g, '').trim()
 }
 
+function extractLeadText(content: string): string | null {
+  const stripped = content
+    .replace(emailRegex, ' ')
+    .replace(phoneRegex, ' ')
+    .replace(/\b(email|mail|phone|number|whatsapp|contact|my|is|at)\b/gi, ' ')
+    .replace(/[:;,]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  return stripped.length > 0 ? stripped : null
+}
+
 export async function upsertLeadFromMessage(
   supabaseAdminClient: SupabaseClient,
   input: LeadCaptureInput,
-): Promise<boolean> {
+): Promise<LeadCaptureResult> {
   const email = input.content.match(emailRegex)?.[0] ?? null
   const phoneRaw = input.content.match(phoneRegex)?.[0] ?? null
   const phone = phoneRaw ? normalizePhone(phoneRaw) : null
   const hasDemoIntent = demoIntentRegex.test(input.content)
+  const extractedLeadText = extractLeadText(input.content)
+  const leadText = hasDemoIntent
+    ? extractedLeadText
+      ? `${extractedLeadText} (Requested demo)`
+      : 'Requested demo in chat'
+    : extractedLeadText
 
   if (!email && !phone && !hasDemoIntent) {
-    return false
+    return {
+      captured: false,
+      email: null,
+      phone: null,
+      leadText: null,
+      hasDemoIntent: false,
+    }
   }
 
   let existingLeadId: string | null = null
@@ -161,7 +193,7 @@ export async function upsertLeadFromMessage(
       .update({
         email,
         phone,
-        need: hasDemoIntent ? 'Requested demo in chat' : null,
+        need: leadText,
         source: 'chat',
       })
       .eq('id', existingLeadId)
@@ -170,14 +202,20 @@ export async function upsertLeadFromMessage(
       throw new AppError(`Failed to update lead from chat: ${error.message}`, 500)
     }
 
-    return true
+    return {
+      captured: true,
+      email,
+      phone,
+      leadText,
+      hasDemoIntent,
+    }
   }
 
   const { error } = await supabaseAdminClient.from('leads').insert({
     client_id: input.clientId,
     email,
     phone,
-    need: hasDemoIntent ? 'Requested demo in chat' : null,
+    need: leadText,
     source: 'chat',
     status: 'new',
   })
@@ -186,5 +224,11 @@ export async function upsertLeadFromMessage(
     throw new AppError(`Failed to insert lead from chat: ${error.message}`, 500)
   }
 
-  return true
+  return {
+    captured: true,
+    email,
+    phone,
+    leadText,
+    hasDemoIntent,
+  }
 }
