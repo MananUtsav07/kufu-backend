@@ -24,6 +24,12 @@ type ApiRouterOptions = {
   openAiApiKey: string;
   openAiModel: string;
   whatsappGraphApiVersion: string;
+  metaAppId: string;
+  metaAppSecret: string;
+  metaVerifyToken: string;
+  metaGraphApiVersion: string;
+  metaRedirectUri: string;
+  metaEmbeddedSignupConfigId: string;
   openAiClient: OpenAI | null;
   supabaseAdminClient: SupabaseClient | null;
   jwtSecret: string;
@@ -99,6 +105,15 @@ export function createApiRouter(options: ApiRouterOptions): Router {
       openAiClient: options.openAiClient,
       dataStore: options.dataStore,
       whatsappGraphApiVersion: options.whatsappGraphApiVersion,
+      jwtSecret: options.jwtSecret,
+      backendBaseUrl: options.backendBaseUrl,
+      frontendUrl: options.frontendUrl,
+      metaAppId: options.metaAppId,
+      metaAppSecret: options.metaAppSecret,
+      metaVerifyToken: options.metaVerifyToken,
+      metaGraphApiVersion: options.metaGraphApiVersion,
+      metaRedirectUri: options.metaRedirectUri,
+      metaEmbeddedSignupConfigId: options.metaEmbeddedSignupConfigId,
     }),
   );
 

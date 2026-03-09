@@ -9,11 +9,17 @@ export type WhatsAppIntegrationRow = {
   client_id: string | null
   chatbot_id: string
   phone_number_id: string
+  business_phone_number_id: string | null
   business_account_id: string | null
+  whatsapp_business_account_id: string | null
+  phone_number: string | null
   display_phone_number: string | null
   access_token: string
   verify_token: string
   webhook_secret: string | null
+  status: 'pending' | 'connecting' | 'connected' | 'failed'
+  onboarding_payload: Record<string, unknown> | null
+  webhook_subscribed: boolean
   is_active: boolean
   last_inbound_at: string | null
   created_at: string
@@ -25,11 +31,17 @@ type UpsertWhatsAppIntegrationInput = {
   clientId: string | null
   chatbotId: string
   phoneNumberId: string
+  businessPhoneNumberId?: string | null
   businessAccountId?: string | null
+  whatsappBusinessAccountId?: string | null
+  phoneNumber?: string | null
   displayPhoneNumber?: string | null
   accessToken: string
   verifyToken: string
   webhookSecret?: string | null
+  status?: 'pending' | 'connecting' | 'connected' | 'failed'
+  onboardingPayload?: Record<string, unknown> | null
+  webhookSubscribed?: boolean
   isActive: boolean
 }
 
@@ -39,6 +51,15 @@ type SendWhatsAppTextMessageInput = {
   phoneNumberId: string
   to: string
   text: string
+}
+
+type AppendWhatsAppOnboardingLogInput = {
+  integrationId?: string | null
+  userId: string
+  clientId?: string | null
+  chatbotId?: string | null
+  eventType: string
+  payload?: Record<string, unknown>
 }
 
 function normalizeTrimmed(value: string | null | undefined): string | null {
@@ -65,7 +86,7 @@ export async function loadWhatsAppIntegrationByUserId(
   const { data, error } = await supabaseAdminClient
     .from('whatsapp_integrations')
     .select(
-      'id, user_id, client_id, chatbot_id, phone_number_id, business_account_id, display_phone_number, access_token, verify_token, webhook_secret, is_active, last_inbound_at, created_at, updated_at',
+      'id, user_id, client_id, chatbot_id, phone_number_id, business_phone_number_id, business_account_id, whatsapp_business_account_id, phone_number, display_phone_number, access_token, verify_token, webhook_secret, status, onboarding_payload, webhook_subscribed, is_active, last_inbound_at, created_at, updated_at',
     )
     .eq('user_id', userId)
     .maybeSingle<WhatsAppIntegrationRow>()
@@ -84,7 +105,7 @@ export async function loadWhatsAppIntegrationByPhoneNumberId(
   const { data, error } = await supabaseAdminClient
     .from('whatsapp_integrations')
     .select(
-      'id, user_id, client_id, chatbot_id, phone_number_id, business_account_id, display_phone_number, access_token, verify_token, webhook_secret, is_active, last_inbound_at, created_at, updated_at',
+      'id, user_id, client_id, chatbot_id, phone_number_id, business_phone_number_id, business_account_id, whatsapp_business_account_id, phone_number, display_phone_number, access_token, verify_token, webhook_secret, status, onboarding_payload, webhook_subscribed, is_active, last_inbound_at, created_at, updated_at',
     )
     .eq('phone_number_id', phoneNumberId)
     .maybeSingle<WhatsAppIntegrationRow>()
@@ -103,7 +124,7 @@ export async function loadWhatsAppIntegrationByVerifyToken(
   const { data, error } = await supabaseAdminClient
     .from('whatsapp_integrations')
     .select(
-      'id, user_id, client_id, chatbot_id, phone_number_id, business_account_id, display_phone_number, access_token, verify_token, webhook_secret, is_active, last_inbound_at, created_at, updated_at',
+      'id, user_id, client_id, chatbot_id, phone_number_id, business_phone_number_id, business_account_id, whatsapp_business_account_id, phone_number, display_phone_number, access_token, verify_token, webhook_secret, status, onboarding_payload, webhook_subscribed, is_active, last_inbound_at, created_at, updated_at',
     )
     .eq('verify_token', verifyToken)
     .maybeSingle<WhatsAppIntegrationRow>()
@@ -124,11 +145,18 @@ export async function upsertWhatsAppIntegration(
     client_id: input.clientId,
     chatbot_id: input.chatbotId,
     phone_number_id: input.phoneNumberId.trim(),
+    business_phone_number_id: normalizeTrimmed(input.businessPhoneNumberId) ?? input.phoneNumberId.trim(),
     business_account_id: normalizeTrimmed(input.businessAccountId),
+    whatsapp_business_account_id:
+      normalizeTrimmed(input.whatsappBusinessAccountId) ?? normalizeTrimmed(input.businessAccountId),
+    phone_number: normalizeTrimmed(input.phoneNumber),
     display_phone_number: normalizeTrimmed(input.displayPhoneNumber),
     access_token: input.accessToken.trim(),
     verify_token: input.verifyToken.trim(),
     webhook_secret: normalizeTrimmed(input.webhookSecret),
+    status: input.status ?? 'connected',
+    onboarding_payload: input.onboardingPayload ?? {},
+    webhook_subscribed: Boolean(input.webhookSubscribed),
     is_active: input.isActive,
     updated_at: new Date().toISOString(),
   }
@@ -139,7 +167,7 @@ export async function upsertWhatsAppIntegration(
       onConflict: 'user_id',
     })
     .select(
-      'id, user_id, client_id, chatbot_id, phone_number_id, business_account_id, display_phone_number, access_token, verify_token, webhook_secret, is_active, last_inbound_at, created_at, updated_at',
+      'id, user_id, client_id, chatbot_id, phone_number_id, business_phone_number_id, business_account_id, whatsapp_business_account_id, phone_number, display_phone_number, access_token, verify_token, webhook_secret, status, onboarding_payload, webhook_subscribed, is_active, last_inbound_at, created_at, updated_at',
     )
     .single<WhatsAppIntegrationRow>()
 
@@ -172,6 +200,7 @@ export async function updateWhatsAppIntegrationLastInboundAt(
     .from('whatsapp_integrations')
     .update({
       last_inbound_at: new Date().toISOString(),
+      status: 'connected',
       updated_at: new Date().toISOString(),
     })
     .eq('id', integrationId)
@@ -216,5 +245,25 @@ export async function sendWhatsAppTextMessage(
 
   return {
     providerMessageId: payload.messages?.[0]?.id ?? null,
+  }
+}
+
+export async function appendWhatsAppOnboardingLog(
+  supabaseAdminClient: SupabaseClient,
+  input: AppendWhatsAppOnboardingLogInput,
+): Promise<void> {
+  const { error } = await supabaseAdminClient
+    .from('whatsapp_onboarding_logs')
+    .insert({
+      integration_id: input.integrationId ?? null,
+      user_id: input.userId,
+      client_id: input.clientId ?? null,
+      chatbot_id: input.chatbotId ?? null,
+      event_type: input.eventType,
+      payload: input.payload ?? {},
+    })
+
+  if (error) {
+    throw new AppError(`Failed to append WhatsApp onboarding log: ${error.message}`, 500)
   }
 }

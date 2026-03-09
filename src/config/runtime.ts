@@ -39,6 +39,14 @@ export const openAiApiKey = process.env.OPENAI_API_KEY?.trim() ?? ''
 export const openAiModel = process.env.OPENAI_MODEL?.trim() || 'gpt-4o-mini'
 export const openAiClient = openAiApiKey ? new OpenAI({ apiKey: openAiApiKey }) : null
 export const whatsappGraphApiVersion = process.env.WHATSAPP_GRAPH_API_VERSION?.trim() || 'v22.0'
+export const metaAppId = process.env.META_APP_ID?.trim() ?? ''
+export const metaAppSecret = process.env.META_APP_SECRET?.trim() ?? ''
+export const metaVerifyToken = process.env.META_VERIFY_TOKEN?.trim() ?? ''
+export const metaGraphApiVersion =
+  process.env.META_GRAPH_API_VERSION?.trim() || whatsappGraphApiVersion
+export const metaRedirectUri = process.env.META_REDIRECT_URI?.trim() ?? ''
+export const metaEmbeddedSignupConfigId =
+  process.env.META_EMBEDDED_SIGNUP_CONFIG_ID?.trim() ?? ''
 
 export const supabaseUrl = process.env.SUPABASE_URL?.trim() ?? ''
 export const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() ?? ''

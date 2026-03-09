@@ -1,11 +1,18 @@
+import { randomBytes } from 'node:crypto'
 import { Router, type Request } from 'express'
 import type OpenAI from 'openai'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
+import { authMiddleware, type AuthenticatedRequest } from '../lib/auth-middleware.js'
 import { asyncHandler, AppError } from '../lib/errors.js'
-import { getTimestamp } from '../lib/http.js'
+import { getTimestamp, respondValidationError } from '../lib/http.js'
 import { buildSystemPrompt } from '../lib/systemPrompt.js'
 import type { DataStore } from '../lib/dataStore.js'
+import {
+  whatsappOnboardingCompleteSchema,
+  whatsappOnboardingStartSchema,
+  whatsappWebhookSubscribeSchema,
+} from '../schemas/whatsapp.js'
 import { retrieveRelevantChunks } from '../rag/retrieval.js'
 import {
   estimateTokens,
@@ -22,13 +29,24 @@ import {
   loadChatbotById,
   loadClientById,
   loadUserById,
+  loadUserChatbots,
 } from '../services/tenantService.js'
 import {
+  exchangeMetaCodeForAccessToken,
+  extractEmbeddedSignupData,
+  fetchMetaWabaPhoneNumbers,
+  subscribeMetaWabaWebhook,
+} from '../services/whatsappOnboardingService.js'
+import {
+  appendWhatsAppOnboardingLog,
+  createWhatsAppVerifyToken,
   loadWhatsAppIntegrationByPhoneNumberId,
+  loadWhatsAppIntegrationByUserId,
   loadWhatsAppIntegrationByVerifyToken,
   normalizeWhatsAppAddress,
   sendWhatsAppTextMessage,
   updateWhatsAppIntegrationLastInboundAt,
+  upsertWhatsAppIntegration,
   type WhatsAppIntegrationRow,
 } from '../services/whatsappService.js'
 
@@ -39,6 +57,15 @@ type WhatsAppRouterOptions = {
   openAiClient: OpenAI | null
   dataStore: DataStore
   whatsappGraphApiVersion: string
+  jwtSecret: string
+  backendBaseUrl: string
+  frontendUrl: string
+  metaAppId: string
+  metaAppSecret: string
+  metaVerifyToken: string
+  metaGraphApiVersion: string
+  metaRedirectUri: string
+  metaEmbeddedSignupConfigId: string
 }
 
 type IncomingWhatsAppTextEvent = {
@@ -46,6 +73,33 @@ type IncomingWhatsAppTextEvent = {
   from: string
   messageId: string | null
   text: string
+}
+
+function asAuthenticatedRequest(request: unknown): AuthenticatedRequest {
+  return request as AuthenticatedRequest
+}
+
+function trimTrailingSlash(value: string): string {
+  return value.replace(/\/+$/, '')
+}
+
+function normalizeString(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null
+  }
+
+  const trimmed = value.trim()
+  return trimmed.length > 0 ? trimmed : null
+}
+
+function coalesceNonEmpty(...values: Array<unknown>): string | null {
+  for (const value of values) {
+    const normalized = normalizeString(value)
+    if (normalized) {
+      return normalized
+    }
+  }
+  return null
 }
 
 function getQueryValue(query: Request['query'], key: string): string | null {
@@ -57,6 +111,81 @@ function getQueryValue(query: Request['query'], key: string): string | null {
     return value[0]
   }
   return null
+}
+
+function toIntegrationPayload(integration: WhatsAppIntegrationRow | null) {
+  if (!integration) {
+    return null
+  }
+
+  return {
+    id: integration.id,
+    chatbot_id: integration.chatbot_id,
+    phone_number_id: integration.phone_number_id,
+    business_phone_number_id: integration.business_phone_number_id,
+    business_account_id: integration.business_account_id,
+    whatsapp_business_account_id: integration.whatsapp_business_account_id,
+    phone_number: integration.phone_number,
+    display_phone_number: integration.display_phone_number,
+    verify_token: integration.verify_token,
+    status: integration.status,
+    webhook_subscribed: integration.webhook_subscribed,
+    is_active: integration.is_active,
+    last_inbound_at: integration.last_inbound_at,
+    created_at: integration.created_at,
+    updated_at: integration.updated_at,
+    has_access_token: Boolean(integration.access_token),
+  }
+}
+
+async function safeAppendOnboardingLog(
+  supabaseAdminClient: SupabaseClient,
+  args: {
+    integrationId?: string | null
+    userId: string
+    clientId?: string | null
+    chatbotId?: string | null
+    eventType: string
+    payload?: Record<string, unknown>
+  },
+) {
+  try {
+    await appendWhatsAppOnboardingLog(supabaseAdminClient, args)
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        level: 'error',
+        type: 'whatsapp_onboarding_log_failed',
+        eventType: args.eventType,
+        reason: error instanceof Error ? error.message : 'Unknown onboarding log failure',
+      }),
+    )
+  }
+}
+
+async function resolveOnboardingChatbot(args: {
+  supabaseAdminClient: SupabaseClient
+  userId: string
+  requestedChatbotId: string | null
+}) {
+  const chatbots = await loadUserChatbots(args.supabaseAdminClient, args.userId)
+  if (chatbots.length === 0) {
+    throw new AppError('Create at least one chatbot before connecting WhatsApp', 400)
+  }
+
+  if (!args.requestedChatbotId) {
+    return {
+      selected: chatbots[0],
+      chatbots,
+    }
+  }
+
+  const selected = chatbots.find((chatbot) => chatbot.id === args.requestedChatbotId)
+  if (!selected) {
+    throw new AppError('Selected chatbot is not available for this user', 404)
+  }
+
+  return { selected, chatbots }
 }
 
 function extractIncomingTextEvents(payload: unknown): IncomingWhatsAppTextEvent[] {
@@ -346,6 +475,410 @@ export function createWhatsAppRouter(options: WhatsAppRouterOptions): Router {
   const router = Router()
 
   router.get(
+    '/callback',
+    asyncHandler(async (request, response) => {
+      const status = getQueryValue(request.query, 'status') ?? 'success'
+      const reason = getQueryValue(request.query, 'reason')
+      const frontendBase = trimTrailingSlash(options.frontendUrl) || 'http://localhost:5173'
+      const redirectUrl = new URL('/dashboard/integrations/whatsapp/connect', `${frontendBase}/`)
+      redirectUrl.searchParams.set('status', status)
+      if (reason) {
+        redirectUrl.searchParams.set('reason', reason)
+      }
+
+      response.redirect(302, redirectUrl.toString())
+    }),
+  )
+
+  router.post(
+    '/onboarding/start',
+    authMiddleware(options.jwtSecret),
+    asyncHandler(async (request, response) => {
+      const parsed = whatsappOnboardingStartSchema.safeParse(request.body)
+      if (!parsed.success) {
+        return respondValidationError(parsed.error, response)
+      }
+
+      const authRequest = asAuthenticatedRequest(request)
+      const user = await loadUserById(options.supabaseAdminClient, authRequest.user.userId)
+      if (!user) {
+        throw new AppError('Unauthorized', 401)
+      }
+
+      const requestedChatbotId = coalesceNonEmpty(parsed.data.chatbotId)
+      const { selected, chatbots } = await resolveOnboardingChatbot({
+        supabaseAdminClient: options.supabaseAdminClient,
+        userId: authRequest.user.userId,
+        requestedChatbotId,
+      })
+
+      const existingIntegration = await loadWhatsAppIntegrationByUserId(
+        options.supabaseAdminClient,
+        authRequest.user.userId,
+      )
+
+      const verifyToken = existingIntegration?.verify_token || createWhatsAppVerifyToken()
+      const onboardingState = randomBytes(18).toString('hex')
+
+      if (existingIntegration) {
+        await upsertWhatsAppIntegration(options.supabaseAdminClient, {
+          userId: authRequest.user.userId,
+          clientId: selected.client_id ?? authRequest.user.clientId,
+          chatbotId: selected.id,
+          phoneNumberId: existingIntegration.phone_number_id,
+          businessPhoneNumberId:
+            existingIntegration.business_phone_number_id ?? existingIntegration.phone_number_id,
+          businessAccountId: existingIntegration.business_account_id,
+          whatsappBusinessAccountId: existingIntegration.whatsapp_business_account_id,
+          phoneNumber: existingIntegration.phone_number,
+          displayPhoneNumber: existingIntegration.display_phone_number,
+          accessToken: existingIntegration.access_token,
+          verifyToken,
+          webhookSecret: existingIntegration.webhook_secret,
+          status: 'connecting',
+          onboardingPayload: {
+            stage: 'start',
+            state: onboardingState,
+            requestedState: parsed.data.state || null,
+            startedAt: new Date().toISOString(),
+          },
+          webhookSubscribed: existingIntegration.webhook_subscribed,
+          isActive: existingIntegration.is_active,
+        })
+      }
+
+      await safeAppendOnboardingLog(options.supabaseAdminClient, {
+        integrationId: existingIntegration?.id ?? null,
+        userId: authRequest.user.userId,
+        clientId: selected.client_id ?? authRequest.user.clientId,
+        chatbotId: selected.id,
+        eventType: 'start',
+        payload: {
+          state: onboardingState,
+          requestedState: parsed.data.state || null,
+        },
+      })
+
+      const webhookUrl = `${trimTrailingSlash(options.backendBaseUrl)}/api/whatsapp/webhook`
+      const redirectUri =
+        options.metaRedirectUri ||
+        `${trimTrailingSlash(options.frontendUrl)}/dashboard/integrations/whatsapp/connect`
+
+      response.json({
+        ok: true,
+        onboarding: {
+          state: onboardingState,
+          chatbotId: selected.id,
+          metaAppId: options.metaAppId || null,
+          configId: options.metaEmbeddedSignupConfigId || null,
+          redirectUri,
+          graphApiVersion: options.metaGraphApiVersion,
+          webhookUrl,
+          verifyToken,
+        },
+        chatbots: chatbots.map((chatbot) => ({
+          id: chatbot.id,
+          name: chatbot.name,
+        })),
+      })
+    }),
+  )
+
+  router.post(
+    '/onboarding/complete',
+    authMiddleware(options.jwtSecret),
+    asyncHandler(async (request, response) => {
+      const parsed = whatsappOnboardingCompleteSchema.safeParse(request.body)
+      if (!parsed.success) {
+        return respondValidationError(parsed.error, response)
+      }
+
+      const authRequest = asAuthenticatedRequest(request)
+      const user = await loadUserById(options.supabaseAdminClient, authRequest.user.userId)
+      if (!user) {
+        throw new AppError('Unauthorized', 401)
+      }
+
+      const requestedChatbotId = coalesceNonEmpty(parsed.data.chatbotId)
+      const { selected } = await resolveOnboardingChatbot({
+        supabaseAdminClient: options.supabaseAdminClient,
+        userId: authRequest.user.userId,
+        requestedChatbotId,
+      })
+
+      const existingIntegration = await loadWhatsAppIntegrationByUserId(
+        options.supabaseAdminClient,
+        authRequest.user.userId,
+      )
+
+      const extracted = extractEmbeddedSignupData(parsed.data.onboardingPayload)
+      const accessTokenFromPayload = coalesceNonEmpty(
+        parsed.data.accessToken,
+        parsed.data.authResponse?.accessToken,
+        extracted.accessToken,
+      )
+      const oauthCode = coalesceNonEmpty(
+        parsed.data.code,
+        parsed.data.authResponse?.code,
+        extracted.oauthCode,
+      )
+
+      let accessToken = accessTokenFromPayload || existingIntegration?.access_token || ''
+      if (!accessToken && oauthCode) {
+        accessToken = await exchangeMetaCodeForAccessToken({
+          graphApiVersion: options.metaGraphApiVersion,
+          appId: options.metaAppId,
+          appSecret: options.metaAppSecret,
+          redirectUri:
+            options.metaRedirectUri ||
+            `${trimTrailingSlash(options.frontendUrl)}/dashboard/integrations/whatsapp/connect`,
+          code: oauthCode,
+        })
+      }
+
+      if (!accessToken) {
+        throw new AppError('Embedded signup did not return an access token', 400)
+      }
+
+      let businessAccountId = coalesceNonEmpty(
+        parsed.data.businessAccountId,
+        extracted.businessAccountId,
+        existingIntegration?.whatsapp_business_account_id,
+        existingIntegration?.business_account_id,
+      )
+      let phoneNumberId = coalesceNonEmpty(
+        parsed.data.phoneNumberId,
+        extracted.phoneNumberId,
+        existingIntegration?.business_phone_number_id,
+        existingIntegration?.phone_number_id,
+      )
+      let displayPhoneNumber = coalesceNonEmpty(
+        parsed.data.displayPhoneNumber,
+        extracted.displayPhoneNumber,
+        existingIntegration?.display_phone_number,
+      )
+      const phoneNumber = coalesceNonEmpty(
+        parsed.data.phoneNumber,
+        extracted.phoneNumber,
+        existingIntegration?.phone_number,
+      )
+
+      if (businessAccountId && !phoneNumberId) {
+        const phoneNumbers = await fetchMetaWabaPhoneNumbers({
+          graphApiVersion: options.metaGraphApiVersion,
+          accessToken,
+          wabaId: businessAccountId,
+        })
+        if (phoneNumbers.length > 0) {
+          phoneNumberId = phoneNumbers[0].id
+          displayPhoneNumber = displayPhoneNumber || phoneNumbers[0].displayPhoneNumber
+        }
+      }
+
+      if (!phoneNumberId) {
+        throw new AppError('Embedded signup did not return a WhatsApp phone number id', 400)
+      }
+
+      const verifyToken = coalesceNonEmpty(
+        parsed.data.verifyToken,
+        existingIntegration?.verify_token,
+      ) || createWhatsAppVerifyToken()
+
+      const webhookUrl = `${trimTrailingSlash(options.backendBaseUrl)}/api/whatsapp/webhook`
+
+      let subscribeResult = {
+        ok: false,
+        message: 'Webhook subscription was skipped.',
+        status: null as number | null,
+        payload: {} as unknown,
+      }
+
+      if (parsed.data.autoSubscribe !== false && businessAccountId) {
+        subscribeResult = await subscribeMetaWabaWebhook({
+          graphApiVersion: options.metaGraphApiVersion,
+          accessToken,
+          wabaId: businessAccountId,
+          webhookUrl,
+          verifyToken,
+        })
+      } else if (!businessAccountId) {
+        subscribeResult = {
+          ok: false,
+          message: 'Business account id is missing. Cannot auto-subscribe webhook.',
+          status: null,
+          payload: {},
+        }
+      }
+
+      const integration = await upsertWhatsAppIntegration(
+        options.supabaseAdminClient,
+        {
+          userId: authRequest.user.userId,
+          clientId: selected.client_id ?? authRequest.user.clientId,
+          chatbotId: selected.id,
+          phoneNumberId,
+          businessPhoneNumberId: phoneNumberId,
+          businessAccountId,
+          whatsappBusinessAccountId: businessAccountId,
+          phoneNumber,
+          displayPhoneNumber,
+          accessToken,
+          verifyToken,
+          webhookSecret: existingIntegration?.webhook_secret ?? null,
+          status: subscribeResult.ok ? 'connected' : 'failed',
+          onboardingPayload: {
+            stage: 'complete',
+            state: parsed.data.state || null,
+            receivedAt: new Date().toISOString(),
+            embeddedPayload: parsed.data.onboardingPayload ?? null,
+            autoSubscribe: parsed.data.autoSubscribe !== false,
+            subscribeResult: {
+              ok: subscribeResult.ok,
+              message: subscribeResult.message,
+              status: subscribeResult.status,
+            },
+          },
+          webhookSubscribed: subscribeResult.ok,
+          isActive: parsed.data.isActive,
+        },
+      )
+
+      await safeAppendOnboardingLog(options.supabaseAdminClient, {
+        integrationId: integration.id,
+        userId: authRequest.user.userId,
+        clientId: integration.client_id,
+        chatbotId: integration.chatbot_id,
+        eventType: subscribeResult.ok ? 'complete_success' : 'complete_failed',
+        payload: {
+          state: parsed.data.state || null,
+          subscribe: {
+            ok: subscribeResult.ok,
+            message: subscribeResult.message,
+            status: subscribeResult.status,
+          },
+        },
+      })
+
+      response.json({
+        ok: true,
+        connected: integration.status === 'connected',
+        webhookUrl,
+        integration: toIntegrationPayload(integration),
+        subscribe: subscribeResult,
+      })
+    }),
+  )
+
+  router.get(
+    '/status',
+    authMiddleware(options.jwtSecret),
+    asyncHandler(async (request, response) => {
+      const authRequest = asAuthenticatedRequest(request)
+      const integration = await loadWhatsAppIntegrationByUserId(
+        options.supabaseAdminClient,
+        authRequest.user.userId,
+      )
+
+      response.json({
+        ok: true,
+        connected: integration?.status === 'connected' && integration?.is_active === true,
+        webhookUrl: `${trimTrailingSlash(options.backendBaseUrl)}/api/whatsapp/webhook`,
+        integration: toIntegrationPayload(integration),
+      })
+    }),
+  )
+
+  router.post(
+    '/webhooks/subscribe',
+    authMiddleware(options.jwtSecret),
+    asyncHandler(async (request, response) => {
+      const parsed = whatsappWebhookSubscribeSchema.safeParse(request.body)
+      if (!parsed.success) {
+        return respondValidationError(parsed.error, response)
+      }
+
+      const authRequest = asAuthenticatedRequest(request)
+      const integration = await loadWhatsAppIntegrationByUserId(
+        options.supabaseAdminClient,
+        authRequest.user.userId,
+      )
+
+      if (!integration) {
+        throw new AppError('WhatsApp integration is not connected', 404)
+      }
+
+      const businessAccountId =
+        integration.whatsapp_business_account_id || integration.business_account_id
+      if (!businessAccountId) {
+        throw new AppError('Business account id is required for webhook subscription', 400)
+      }
+
+      const verifyToken =
+        coalesceNonEmpty(parsed.data.verifyToken, integration.verify_token) ||
+        createWhatsAppVerifyToken()
+      const webhookUrl = `${trimTrailingSlash(options.backendBaseUrl)}/api/whatsapp/webhook`
+
+      const subscribeResult = await subscribeMetaWabaWebhook({
+        graphApiVersion: options.metaGraphApiVersion,
+        accessToken: integration.access_token,
+        wabaId: businessAccountId,
+        webhookUrl,
+        verifyToken,
+      })
+
+      const nextIntegration = await upsertWhatsAppIntegration(
+        options.supabaseAdminClient,
+        {
+          userId: authRequest.user.userId,
+          clientId: integration.client_id,
+          chatbotId: integration.chatbot_id,
+          phoneNumberId: integration.phone_number_id,
+          businessPhoneNumberId: integration.business_phone_number_id ?? integration.phone_number_id,
+          businessAccountId: integration.business_account_id,
+          whatsappBusinessAccountId: integration.whatsapp_business_account_id,
+          phoneNumber: integration.phone_number,
+          displayPhoneNumber: integration.display_phone_number,
+          accessToken: integration.access_token,
+          verifyToken,
+          webhookSecret: integration.webhook_secret,
+          status: subscribeResult.ok ? 'connected' : 'failed',
+          onboardingPayload: {
+            ...(integration.onboarding_payload ?? {}),
+            webhookSubscribeRetryAt: new Date().toISOString(),
+            webhookSubscribeResult: {
+              ok: subscribeResult.ok,
+              message: subscribeResult.message,
+              status: subscribeResult.status,
+            },
+          },
+          webhookSubscribed: subscribeResult.ok,
+          isActive: integration.is_active,
+        },
+      )
+
+      await safeAppendOnboardingLog(options.supabaseAdminClient, {
+        integrationId: integration.id,
+        userId: authRequest.user.userId,
+        clientId: integration.client_id,
+        chatbotId: integration.chatbot_id,
+        eventType: subscribeResult.ok ? 'subscribe_success' : 'subscribe_failed',
+        payload: {
+          message: subscribeResult.message,
+          status: subscribeResult.status,
+        },
+      })
+
+      response.json({
+        ok: true,
+        connected: nextIntegration.status === 'connected',
+        webhookUrl,
+        integration: toIntegrationPayload(nextIntegration),
+        subscribe: subscribeResult,
+      })
+    }),
+  )
+
+  router.get(
     '/webhook',
     asyncHandler(async (request, response) => {
       const mode = getQueryValue(request.query, 'hub.mode')
@@ -358,6 +891,11 @@ export function createWhatsAppRouter(options: WhatsAppRouterOptions): Router {
 
       if (mode !== 'subscribe') {
         throw new AppError('Unsupported webhook mode', 400)
+      }
+
+      if (options.metaVerifyToken && verifyToken === options.metaVerifyToken) {
+        response.status(200).send(challenge)
+        return
       }
 
       const integration = await loadWhatsAppIntegrationByVerifyToken(
