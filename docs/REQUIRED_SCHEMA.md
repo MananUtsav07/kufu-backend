@@ -51,6 +51,8 @@ Use it with `npm run verify-schema` before deploys.
   - `id`, `user_id`, `requested_plan`, `requested_chatbots`, `requested_monthly_messages`, `requested_unlimited_messages`, `notes`, `status`, `admin_response`, `created_at`, `updated_at`
 - `audit_logs`
   - `id`, `actor_user_id`, `action`, `metadata`, `created_at`
+- `website_integrations`
+  - `id`, `user_id`, `chatbot_id`, `website_url`, `detected_type`, `detection_confidence`, `detection_signals`, `last_detected_at`, `created_at`, `updated_at`
 
 ## Upload metadata
 

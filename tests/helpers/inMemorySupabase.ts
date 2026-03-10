@@ -700,6 +700,7 @@ export function createSeededSupabaseClient(): {
     rag_pages: [],
     rag_chunks: [],
     rag_ingestion_runs: [],
+    website_integrations: [],
   })
 
   return {

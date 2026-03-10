@@ -13,6 +13,9 @@ Apply migrations in numeric order:
 5. `005_custom_quote_monthly_messages.sql`
 6. `006_whatsapp_automation.sql`
 7. `007_whatsapp_embedded_signup.sql`
+8. `008_performance_indexes.sql`
+9. `009_backfill_chatbot_client_id.sql`
+10. `010_website_integrations.sql`
 
 Before every deploy run:
 

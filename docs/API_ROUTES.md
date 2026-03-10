@@ -344,6 +344,47 @@ Auth: Bearer JWT (user/admin)
 }
 ```
 
+## Site Detection
+
+Auth: Bearer JWT (dashboard user/admin)
+
+### `POST /api/site-detection/detect`
+- Body:
+```json
+{
+  "websiteUrl": "https://example.com",
+  "chatbotId": "uuid-optional"
+}
+```
+- Response:
+```json
+{
+  "ok": true,
+  "websiteType": "wordpress",
+  "confidence": "high",
+  "signals": ["wp-content", "/wp-json"]
+}
+```
+
+### `GET /api/site-detection/install-guide?websiteType=wordpress&chatbotId=...`
+- Query params:
+  - `websiteType` required: `wordpress|shopify|react|nextjs|webflow|wix|squarespace|custom|unknown`
+  - `chatbotId` optional; when provided and owned, script includes that chatbot public key.
+- Response:
+```json
+{
+  "ok": true,
+  "title": "Install on WordPress",
+  "steps": [
+    "Open your WordPress admin dashboard.",
+    "Go to Appearance > Theme File Editor, or use a header/footer code plugin.",
+    "Paste the Kufu embed snippet before the closing </body> tag.",
+    "Publish your site and open it in a new tab to confirm the Kufu widget appears."
+  ],
+  "scriptExample": "<script src=\"https://backend.example.com/widget/kufu.js?key=...\" async></script>"
+}
+```
+
 ### `GET /api/dashboard/whatsapp`
 - Returns the current WhatsApp integration and webhook URL.
 - Response:

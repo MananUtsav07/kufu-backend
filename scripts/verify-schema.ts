@@ -134,6 +134,21 @@ const requiredTableSpecs: TableSpec[] = [
       'updated_at',
     ],
   },
+  {
+    table: 'website_integrations',
+    columns: [
+      'id',
+      'user_id',
+      'chatbot_id',
+      'website_url',
+      'detected_type',
+      'detection_confidence',
+      'detection_signals',
+      'last_detected_at',
+      'created_at',
+      'updated_at',
+    ],
+  },
 ]
 
 const requiredStorageBuckets = ['kufu-logos', 'kufu-kb-docs']
@@ -146,6 +161,8 @@ const requiredMigrationFiles = [
   '006_whatsapp_automation.sql',
   '007_whatsapp_embedded_signup.sql',
   '008_performance_indexes.sql',
+  '009_backfill_chatbot_client_id.sql',
+  '010_website_integrations.sql',
 ]
 
 function readRequiredEnv(name: string): string | null {

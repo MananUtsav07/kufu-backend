@@ -16,6 +16,7 @@ import { createChatRouter } from './chat.js'
 import { createChatbotRouter } from './chatbot.js'
 import { createDashboardRouter } from './dashboard.js'
 import { createRagRouter } from './rag.js'
+import { createSiteDetectionRouter } from './siteDetection.js'
 import { createWhatsAppRouter } from './whatsapp.js'
 import { createWidgetApiRouter } from './widget.js'
 
@@ -109,6 +110,15 @@ export function createApiRouter(options: ApiRouterOptions): Router {
       openAiModel: options.openAiModel,
       whatsappGraphApiVersion: options.whatsappGraphApiVersion,
       openAiClient: options.openAiClient,
+    }),
+  )
+
+  router.use(
+    '/site-detection',
+    createSiteDetectionRouter({
+      jwtSecret: options.jwtSecret,
+      supabaseAdminClient: options.supabaseAdminClient,
+      backendBaseUrl: options.backendBaseUrl,
     }),
   )
 

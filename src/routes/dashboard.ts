@@ -75,6 +75,7 @@ import {
   upsertWhatsAppIntegration,
   type WhatsAppIntegrationRow,
 } from "../services/whatsappService.js";
+import { buildWidgetEmbedSnippet } from "../services/embedSnippetService.js";
 
 type DashboardRouterOptions = {
   jwtSecret: string;
@@ -918,8 +919,10 @@ export function createDashboardRouter(options: DashboardRouterOptions): Router {
         throw new AppError("Chatbot not found", 404);
       }
 
-      const backendBase = trimTrailingSlash(options.backendBaseUrl);
-      const snippet = `<script src="${backendBase}/widget/kufu.js?key=${encodeURIComponent(chatbot.widget_public_key)}" async></script>`;
+      const snippet = buildWidgetEmbedSnippet({
+        backendBaseUrl: options.backendBaseUrl,
+        widgetPublicKey: chatbot.widget_public_key,
+      });
 
       response.json({
         ok: true,
