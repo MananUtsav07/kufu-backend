@@ -27,6 +27,11 @@ type HttpPageResponse = {
   html: string;
 };
 
+type ExtractedHtmlContent = {
+  title: string | null;
+  text: string;
+};
+
 const blockedPathFragments = [
   "/wp-admin",
   "/account",
@@ -63,6 +68,31 @@ const jsRenderTimeoutMs = Number(
 );
 
 let browserPromise: Promise<Browser | null> | null = null;
+
+function normalizeWhitespace(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function hasHtmlContentType(contentType: string): boolean {
+  const normalizedContentType = contentType.toLowerCase();
+  return (
+    normalizedContentType.includes("text/html") ||
+    normalizedContentType.includes("application/xhtml+xml")
+  );
+}
+
+function extractHtmlContent(html: string): ExtractedHtmlContent {
+  const $ = cheerio.load(html);
+  $("script, style, noscript").remove();
+
+  const titleText = normalizeWhitespace($("title").first().text());
+  const bodyText = normalizeWhitespace($("body").text());
+
+  return {
+    title: titleText.length > 0 ? titleText : null,
+    text: bodyText,
+  };
+}
 
 function normalizeUrl(rawUrl: string, baseUrl?: string): string | null {
   try {
@@ -130,15 +160,22 @@ async function fetchHtmlWithAxios(
   };
 }
 
-async function fetchWithJina(url: string): Promise<string> {
+async function fetchWithJina(url: string, timeoutMs = 30_000): Promise<string> {
+  const jinaApiKey = process.env.JINA_API_KEY?.trim();
+  const headers: Record<string, string> = {
+    Accept: "text/plain",
+  };
+
+  if (jinaApiKey) {
+    headers.Authorization = `Bearer ${jinaApiKey}`;
+  }
+
   const response = await axios.get(`https://r.jina.ai/${url}`, {
-    timeout: 30_000,
-    headers: {
-      'Accept': 'text/plain',
-      'Authorization': `Bearer ${process.env.JINA_API_KEY}`, // add this
-    },
-  })
-  return typeof response.data === 'string' ? response.data : ''
+    timeout: timeoutMs,
+    headers,
+  });
+
+  return typeof response.data === "string" ? normalizeWhitespace(response.data) : "";
 }
 
 async function fetchSitemapUrls(
@@ -387,20 +424,81 @@ export async function discoverWebsiteUrls(
   return Array.from(dedup).slice(0, maxPages);
 }
 
-export async function fetchAndExtractPage(options: FetchPageOptions): Promise<CrawledPage> {
+export async function fetchAndExtractPage(
+  options: FetchPageOptions,
+): Promise<CrawledPage> {
+  const fetchTimeoutMs = options.fetchTimeoutMs ?? 12_000;
+
+  console.info(`[rag] fetching url=${options.url}`);
+
   try {
-    console.info(`[rag] fetching url=${options.url}`)
-    const contentText = await fetchWithJina(options.url)
-    console.info(`[rag] fetched url=${options.url} extractedLen=${contentText.length}`)
-    
+    const contentText = await fetchWithJina(options.url, Math.max(fetchTimeoutMs, 20_000));
+    if (contentText.length > 0) {
+      console.info(
+        `[rag] fetched via=jina url=${options.url} extractedLen=${contentText.length}`,
+      );
+
+      return {
+        url: options.url,
+        title: null,
+        contentText,
+        httpStatus: 200,
+      };
+    }
+
+    console.warn(`[rag] empty jina response url=${options.url}`);
+  } catch (error) {
+    console.warn(
+      `[rag] jina fetch failed url=${options.url} error=${error instanceof Error ? error.message : "unknown"}`,
+    );
+  }
+
+  try {
+    const pageResponse = await fetchHtmlWithAxios(options.url, fetchTimeoutMs);
+    if (
+      pageResponse.status >= 200 &&
+      pageResponse.status < 300 &&
+      hasHtmlContentType(pageResponse.contentType)
+    ) {
+      const extracted = extractHtmlContent(pageResponse.html);
+      if (extracted.text.length > 0) {
+        console.info(
+          `[rag] fetched via=direct-html url=${options.url} extractedLen=${extracted.text.length}`,
+        );
+
+        return {
+          url: options.url,
+          title: extracted.title,
+          contentText: extracted.text,
+          httpStatus: pageResponse.status,
+        };
+      }
+    }
+
+    console.warn(
+      `[rag] direct html fetch produced no text url=${options.url} status=${pageResponse.status} contentType=${pageResponse.contentType}`,
+    );
+  } catch (error) {
+    console.warn(
+      `[rag] direct html fetch failed url=${options.url} error=${error instanceof Error ? error.message : "unknown"}`,
+    );
+  }
+
+  const rendered = await renderPageWithPlaywright(options.url);
+  if (rendered?.text && normalizeWhitespace(rendered.text).length > 0) {
+    const renderedText = normalizeWhitespace(rendered.text);
+    console.info(
+      `[rag] fetched via=playwright url=${options.url} extractedLen=${renderedText.length}`,
+    );
+
     return {
       url: options.url,
       title: null,
-      contentText: contentText || `Source URL: ${options.url}`,
+      contentText: renderedText,
       httpStatus: 200,
-    }
-  } catch (error) {
-    console.error(`[rag] failed url=${options.url} error=${error instanceof Error ? error.message : 'unknown'}`)
-    throw new Error(`Failed to fetch: ${options.url}`)
+    };
   }
+
+  console.error(`[rag] failed url=${options.url} error=all fetch strategies exhausted`);
+  throw new Error(`Failed to fetch: ${options.url}`);
 }

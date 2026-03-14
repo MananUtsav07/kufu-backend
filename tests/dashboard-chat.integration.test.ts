@@ -31,6 +31,14 @@ describe('dashboard, plans, and chat integration', () => {
     expect(chatbotsResponse.body.ok).toBe(true)
     expect(Array.isArray(chatbotsResponse.body.chatbots)).toBe(true)
     expect(chatbotsResponse.body.chatbots[0]).toHaveProperty('widget_public_key')
+
+    const embedResponse = await request(app)
+      .get(`/api/dashboard/embed/${seed.starterUser.chatbotId}`)
+      .set('Authorization', `Bearer ${token}`)
+
+    expect(embedResponse.status).toBe(200)
+    expect(embedResponse.body.ok).toBe(true)
+    expect(String(embedResponse.body.snippet)).toContain('/widget/kufu.js?key=')
   })
 
   it('enforces auth and plan gates for dashboard routes', async () => {
