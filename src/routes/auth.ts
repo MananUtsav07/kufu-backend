@@ -10,7 +10,7 @@ import { signAuthToken } from '../lib/jwt.js'
 import type { createMailer } from '../lib/mailer.js'
 import { createFixedWindowLimiter } from '../lib/rateLimit.js'
 import { normalizeEmail } from '../lib/validation.js'
-import { loginSchema, registerSchema, verifyEmailSchema, authTokenQuerySchema } from '../schemas/auth.js'
+import { loginSchema, registerSchema, verifyEmailSchema, authTokenQuerySchema, forgotPasswordSchema, resetPasswordSchema, resendVerificationSchema } from '../schemas/auth.js'
 import { writeAuditLog } from '../services/auditService.js'
 import {
   ensureClientForUser,
@@ -467,6 +467,130 @@ export function createAuthRouter(options: AuthRouterOptions): Router {
 
     response.json({ ok: true })
   })
+
+  router.post(
+    '/forgot-password',
+    asyncHandler(async (request, response) => {
+      const parsed = forgotPasswordSchema.safeParse(request.body)
+      if (!parsed.success) {
+        return respondValidationError(parsed.error, response)
+      }
+
+      const normalizedEmail = normalizeEmail(parsed.data.email)
+      const user = await loadUserByEmail(options.supabaseAdminClient, normalizedEmail)
+
+      if (user) {
+        const expiresInMinutes = 60
+        const token = randomBytes(32).toString('hex')
+        const expiresAt = new Date(Date.now() + expiresInMinutes * 60 * 1000).toISOString()
+
+        await options.supabaseAdminClient.from('password_reset_tokens').delete().eq('user_id', user.id)
+        await options.supabaseAdminClient.from('password_reset_tokens').insert({
+          user_id: user.id,
+          email: normalizedEmail,
+          token,
+          expires_at: expiresAt,
+        })
+
+        const resetUrl = `${trimTrailingSlash(options.appBaseUrl)}/reset-password?token=${encodeURIComponent(token)}`
+
+        if (options.mailer) {
+          try {
+            await options.mailer.sendPasswordResetEmail({ to: normalizedEmail, resetUrl, expiresInMinutes })
+          } catch {
+            // swallow email errors — don't leak failures
+          }
+        }
+      }
+
+      return response.json({ ok: true })
+    }),
+  )
+
+  router.post(
+    '/reset-password',
+    asyncHandler(async (request, response) => {
+      const parsed = resetPasswordSchema.safeParse(request.body)
+      if (!parsed.success) {
+        return respondValidationError(parsed.error, response)
+      }
+
+      const { data: row, error } = await options.supabaseAdminClient
+        .from('password_reset_tokens')
+        .select('id, user_id, expires_at')
+        .eq('token', parsed.data.token)
+        .maybeSingle()
+
+      if (error || !row) {
+        throw new AppError('Invalid reset token', 400)
+      }
+
+      if (isTokenExpired(row.expires_at)) {
+        await options.supabaseAdminClient.from('password_reset_tokens').delete().eq('id', row.id)
+        throw new AppError('Reset token expired', 400)
+      }
+
+      const passwordHash = await bcrypt.hash(parsed.data.password, 12)
+
+      const { error: updateError } = await options.supabaseAdminClient
+        .from('users')
+        .update({ password_hash: passwordHash })
+        .eq('id', row.user_id)
+
+      if (updateError) {
+        throw new AppError(`Failed to update password: ${updateError.message}`, 500)
+      }
+
+      await options.supabaseAdminClient.from('password_reset_tokens').delete().eq('id', row.id)
+
+      await writeAuditLog({
+        supabaseAdminClient: options.supabaseAdminClient,
+        actorUserId: row.user_id,
+        action: 'auth.reset_password',
+      })
+
+      return response.json({ ok: true })
+    }),
+  )
+
+  router.post(
+    '/resend-verification',
+    asyncHandler(async (request, response) => {
+      const parsed = resendVerificationSchema.safeParse(request.body)
+      if (!parsed.success) {
+        return respondValidationError(parsed.error, response)
+      }
+
+      const normalizedEmail = normalizeEmail(parsed.data.email)
+      const user = await loadUserByEmail(options.supabaseAdminClient, normalizedEmail)
+
+      if (user && !user.is_verified) {
+        const verificationToken = await insertOrRotateVerificationToken({
+          supabaseAdminClient: options.supabaseAdminClient,
+          userId: user.id,
+          email: normalizedEmail,
+        })
+
+        const verificationUrl = `${trimTrailingSlash(options.appBaseUrl)}/verify?token=${encodeURIComponent(verificationToken.token)}`
+        const backendVerifyUrl = `${trimTrailingSlash(options.backendBaseUrl)}/api/auth/verify?token=${encodeURIComponent(verificationToken.token)}`
+
+        if (options.mailer) {
+          try {
+            await options.mailer.sendVerificationEmail({
+              to: normalizedEmail,
+              verificationUrl,
+              fallbackVerificationUrl: backendVerifyUrl,
+              expiresInMinutes: verificationToken.expiresInMinutes,
+            })
+          } catch {
+            // swallow email errors — don't leak failures
+          }
+        }
+      }
+
+      return response.json({ ok: true })
+    }),
+  )
 
   return router
 }

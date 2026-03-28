@@ -32,6 +32,12 @@ type ContactLeadNotificationPayload = {
   message: string
 }
 
+type PasswordResetEmailPayload = {
+  to: string
+  resetUrl: string
+  expiresInMinutes: number
+}
+
 type ClientNewChatNotificationPayload = {
   to: string
   submittedAtIso: string
@@ -110,6 +116,43 @@ export function createMailer(options: MailerOptions) {
           subject: 'Verify your Kufu account',
           htmlContent: html,
           textContent: `Verify your account: ${verificationUrl}\n\nBackup link: ${fallbackVerificationUrl}\n\nLink expires in ${expiresInMinutes} minutes.`,
+        },
+        {
+          headers: {
+            'api-key': brevoApiKey,
+            'Content-Type': 'application/json',
+          },
+        },
+      )
+    },
+    async sendPasswordResetEmail(payload: PasswordResetEmailPayload): Promise<void> {
+      const { to, resetUrl, expiresInMinutes } = payload
+
+      const html = `
+        <div style="font-family: Inter, Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #0f172a;">
+          <h2 style="margin-bottom: 12px;">Reset your Kufu password</h2>
+          <p style="margin-bottom: 16px;">Click the button below to reset your password. This link expires in ${expiresInMinutes} minutes.</p>
+          <p style="margin-bottom: 20px;">
+            <a href="${resetUrl}" style="display: inline-block; padding: 10px 18px; background: #1325ec; color: #ffffff; text-decoration: none; border-radius: 8px; font-weight: 600;">
+              Reset Password
+            </a>
+          </p>
+          <p style="font-size: 13px; line-height: 1.5; color: #334155;">
+            If the button does not work, use this link:<br />
+            <a href="${resetUrl}">${resetUrl}</a>
+          </p>
+          <p style="font-size: 13px; color: #64748b;">If you did not request a password reset, you can safely ignore this email.</p>
+        </div>
+      `
+
+      await axios.post(
+        'https://api.brevo.com/v3/smtp/email',
+        {
+          sender: { name: 'Kufu', email: emailFrom },
+          to: [{ email: to }],
+          subject: 'Reset your Kufu password',
+          htmlContent: html,
+          textContent: `Reset your Kufu password: ${resetUrl}\n\nLink expires in ${expiresInMinutes} minutes.\n\nIf you did not request this, ignore this email.`,
         },
         {
           headers: {

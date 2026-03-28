@@ -27,3 +27,22 @@ export const verifyEmailSchema = z
 export const authTokenQuerySchema = z.object({
   token: z.string().trim().min(1, 'Token is required').optional(),
 })
+
+export const forgotPasswordSchema = z
+  .object({
+    email: emailSchema,
+  })
+  .strict()
+
+export const resetPasswordSchema = z
+  .object({
+    token: z.string().trim().min(1, 'Token is required'),
+    password: passwordSchema,
+  })
+  .strict()
+
+export const resendVerificationSchema = z
+  .object({
+    email: emailSchema,
+  })
+  .strict()
