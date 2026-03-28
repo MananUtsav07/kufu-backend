@@ -190,6 +190,7 @@ async function buildWidgetScript(options: WidgetRouterOptions, key: string): Pro
   if (window.__kufuWidgetLoaded) return;
   window.__kufuWidgetLoaded = true;
 
+  function init() {
   var iframe = document.createElement('iframe');
   iframe.src = '${iframeSource}';
   iframe.style.position = 'fixed';
@@ -264,6 +265,13 @@ async function buildWidgetScript(options: WidgetRouterOptions, key: string): Pro
   sync();
 
   console.log('[kufu-widget] loaded', { key: '${encodedKey}', backend: '${backendBase}' });
+  } // end init
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
 })();`
 }
 
