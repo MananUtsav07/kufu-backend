@@ -106,7 +106,7 @@ async function insertOrRotateVerificationToken(args: {
   email: string
 }): Promise<{ token: string; expiresInMinutes: number }> {
   const token = randomBytes(32).toString('hex')
-  const expiresInMinutes = 10
+  const expiresInMinutes = 60 * 24 // 24 hours
   const expiresAt = new Date(Date.now() + expiresInMinutes * 60 * 1000).toISOString()
 
   await args.supabaseAdminClient.from('email_verification_tokens').delete().eq('user_id', args.userId)
