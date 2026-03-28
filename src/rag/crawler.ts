@@ -162,18 +162,25 @@ async function fetchHtmlWithAxios(
 
 async function fetchWithJina(url: string, timeoutMs = 30_000): Promise<string> {
   const jinaApiKey = process.env.JINA_API_KEY?.trim();
-  const headers: Record<string, string> = {
-    Accept: "text/plain",
+  const jinaUrl = `https://r.jina.ai/${url}`;
+
+  const makeRequest = async (withKey: boolean) => {
+    const headers: Record<string, string> = { Accept: "text/plain" };
+    if (withKey && jinaApiKey) headers.Authorization = `Bearer ${jinaApiKey}`;
+    return axios.get<string>(jinaUrl, { timeout: timeoutMs, headers, validateStatus: () => true });
   };
 
-  if (jinaApiKey) {
-    headers.Authorization = `Bearer ${jinaApiKey}`;
+  let response = await makeRequest(true);
+
+  // If auth failed (invalid/expired key), retry without key
+  if (response.status === 401 && jinaApiKey) {
+    console.warn("[rag] jina key returned 401, retrying without key");
+    response = await makeRequest(false);
   }
 
-  const response = await axios.get(`https://r.jina.ai/${url}`, {
-    timeout: timeoutMs,
-    headers,
-  });
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(`Jina returned HTTP ${response.status}`);
+  }
 
   return typeof response.data === "string" ? normalizeWhitespace(response.data) : "";
 }
