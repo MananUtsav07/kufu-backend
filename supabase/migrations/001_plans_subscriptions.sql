@@ -1,45 +1,9 @@
-﻿-- 001_plans_subscriptions.sql
--- Run in Supabase SQL editor.
+-- 001_plans_subscriptions.sql
+-- Requires 000_base_schema.sql to have been run first.
 
 create extension if not exists pgcrypto;
 
--- users role support
-alter table public.users
-  add column if not exists role text not null default 'user';
-
-alter table public.users
-  drop constraint if exists users_role_check;
-
-alter table public.users
-  add constraint users_role_check check (role in ('user', 'admin'));
-
-alter table public.users
-  alter column email set not null;
-
-create unique index if not exists users_email_unique_idx on public.users (email);
-
--- clients additions
-alter table public.clients
-  add column if not exists plan text not null default 'free',
-  add column if not exists knowledge_base_text text;
-
-alter table public.clients
-  alter column knowledge_base_text set default '';
-
--- token hardening
-alter table public.email_verification_tokens
-  alter column token set not null,
-  alter column expires_at set not null;
-
-create unique index if not exists email_verification_tokens_token_unique_idx
-  on public.email_verification_tokens (token);
-
-create index if not exists email_verification_tokens_user_id_idx
-  on public.email_verification_tokens (user_id);
-
-create index if not exists email_verification_tokens_email_idx
-  on public.email_verification_tokens (email);
-
+-- plans
 create table if not exists public.plans (
   id uuid primary key default gen_random_uuid(),
   code text not null unique,
@@ -51,6 +15,7 @@ create table if not exists public.plans (
   created_at timestamptz not null default now()
 );
 
+-- subscriptions
 create table if not exists public.subscriptions (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references public.users(id) on delete cascade,
@@ -69,6 +34,7 @@ create unique index if not exists subscriptions_user_unique_idx on public.subscr
 create index if not exists subscriptions_plan_code_idx on public.subscriptions (plan_code);
 create index if not exists subscriptions_period_end_idx on public.subscriptions (current_period_end);
 
+-- chatbots
 create table if not exists public.chatbots (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references public.users(id) on delete cascade,
@@ -87,6 +53,7 @@ create index if not exists chatbots_user_id_idx on public.chatbots (user_id);
 create index if not exists chatbots_client_id_idx on public.chatbots (client_id);
 create index if not exists chatbots_created_at_idx on public.chatbots (created_at desc);
 
+-- chatbot_messages
 create table if not exists public.chatbot_messages (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references public.users(id) on delete cascade,
@@ -104,6 +71,7 @@ create index if not exists chatbot_messages_chatbot_id_idx on public.chatbot_mes
 create index if not exists chatbot_messages_session_id_idx on public.chatbot_messages (session_id);
 create index if not exists chatbot_messages_created_at_idx on public.chatbot_messages (created_at desc);
 
+-- tickets
 create table if not exists public.tickets (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references public.users(id) on delete cascade,
@@ -120,6 +88,7 @@ create index if not exists tickets_user_id_idx on public.tickets (user_id);
 create index if not exists tickets_status_idx on public.tickets (status);
 create index if not exists tickets_created_at_idx on public.tickets (created_at desc);
 
+-- custom_quotes
 create table if not exists public.custom_quotes (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references public.users(id) on delete cascade,
@@ -138,6 +107,7 @@ create index if not exists custom_quotes_user_id_idx on public.custom_quotes (us
 create index if not exists custom_quotes_status_idx on public.custom_quotes (status);
 create index if not exists custom_quotes_created_at_idx on public.custom_quotes (created_at desc);
 
+-- audit_logs
 create table if not exists public.audit_logs (
   id uuid primary key default gen_random_uuid(),
   actor_user_id uuid references public.users(id) on delete set null,
@@ -149,21 +119,22 @@ create table if not exists public.audit_logs (
 create index if not exists audit_logs_actor_user_id_idx on public.audit_logs (actor_user_id);
 create index if not exists audit_logs_created_at_idx on public.audit_logs (created_at desc);
 
+-- seed plans
 insert into public.plans (code, name, monthly_message_cap, chatbot_limit, price_inr, is_active)
 values
-  ('free', 'Free', 10, 1, 0, true),
-  ('starter', 'Starter', 1000, 1, 1999, true),
-  ('pro', 'Pro', 10000, 1, 3999, true),
-  ('business', 'Business', null, 10, 7999, true)
+  ('free',     'Free',     10,    1,  0,    true),
+  ('starter',  'Starter',  1000,  1,  1999, true),
+  ('pro',      'Pro',      10000, 1,  3999, true),
+  ('business', 'Business', null,  10, 7999, true)
 on conflict (code) do update
 set
-  name = excluded.name,
+  name                = excluded.name,
   monthly_message_cap = excluded.monthly_message_cap,
-  chatbot_limit = excluded.chatbot_limit,
-  price_inr = excluded.price_inr,
-  is_active = excluded.is_active;
+  chatbot_limit       = excluded.chatbot_limit,
+  price_inr           = excluded.price_inr,
+  is_active           = excluded.is_active;
 
--- helper for future Supabase Auth based RLS adoption
+-- helper function for RLS
 create or replace function public.current_request_user_id()
 returns uuid
 language plpgsql
@@ -198,6 +169,7 @@ begin
 end;
 $$;
 
+-- RLS
 alter table public.users enable row level security;
 alter table public.clients enable row level security;
 alter table public.email_verification_tokens enable row level security;
@@ -213,8 +185,7 @@ alter table public.audit_logs enable row level security;
 
 drop policy if exists users_self_select on public.users;
 create policy users_self_select on public.users
-for select
-using (id = public.current_request_user_id());
+for select using (id = public.current_request_user_id());
 
 drop policy if exists users_self_update on public.users;
 create policy users_self_update on public.users
@@ -224,8 +195,7 @@ with check (id = public.current_request_user_id());
 
 drop policy if exists clients_owner_select on public.clients;
 create policy clients_owner_select on public.clients
-for select
-using (user_id = public.current_request_user_id());
+for select using (user_id = public.current_request_user_id());
 
 drop policy if exists clients_owner_update on public.clients;
 create policy clients_owner_update on public.clients
@@ -235,8 +205,7 @@ with check (user_id = public.current_request_user_id());
 
 drop policy if exists verification_tokens_owner_select on public.email_verification_tokens;
 create policy verification_tokens_owner_select on public.email_verification_tokens
-for select
-using (user_id = public.current_request_user_id());
+for select using (user_id = public.current_request_user_id());
 
 drop policy if exists verification_tokens_owner_update on public.email_verification_tokens;
 create policy verification_tokens_owner_update on public.email_verification_tokens
@@ -282,8 +251,7 @@ with check (
 
 drop policy if exists plans_public_read on public.plans;
 create policy plans_public_read on public.plans
-for select
-using (true);
+for select using (true);
 
 drop policy if exists subscriptions_owner_all on public.subscriptions;
 create policy subscriptions_owner_all on public.subscriptions
@@ -314,5 +282,3 @@ create policy custom_quotes_owner_all on public.custom_quotes
 for all
 using (user_id = public.current_request_user_id())
 with check (user_id = public.current_request_user_id());
-
--- no direct client access to audit logs

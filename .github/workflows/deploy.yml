@@ -1,0 +1,51 @@
+name: Deploy Backend
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: Upload built dist to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.LIGHTSAIL_HOST }}
+          username: ubuntu
+          key: ${{ secrets.LIGHTSAIL_SSH_KEY }}
+          source: 'dist/,package.json,package-lock.json,start.sh'
+          target: /opt/kufu-backend
+          strip_components: 0
+
+      - name: Install production deps & reload PM2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.LIGHTSAIL_HOST }}
+          username: ubuntu
+          key: ${{ secrets.LIGHTSAIL_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/kufu-backend
+            npm ci --omit=dev
+            pm2 reload kufu-backend --update-env
+            pm2 save
+            echo "Deploy complete — $(pm2 list | grep kufu-backend | awk '{print $18, \"uptime:\", $14}')"
