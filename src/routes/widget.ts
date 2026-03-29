@@ -139,7 +139,7 @@ async function buildWidgetConfigResponse(options: WidgetRouterOptions, key: stri
   const botName = chatbotSettings?.bot_name?.trim() || chatbot.name
   const greetingMessage =
     chatbotSettings?.greeting_message?.trim() ||
-    `Hi, welcome to ${client?.business_name ?? 'Kufu'}. How can we help you today?`
+    `Hi, welcome to ${botName}. How can we help you today?`
   const primaryColor = chatbotSettings?.primary_color?.trim() || '#6366f1'
 
   const logoUrl = await resolveWidgetLogoUrl({
@@ -157,7 +157,7 @@ async function buildWidgetConfigResponse(options: WidgetRouterOptions, key: stri
       client_id: chatbot.client_id,
       widget_public_key: chatbot.widget_public_key,
       name: botName,
-      business_name: client?.business_name ?? 'Kufu',
+      business_name: botName,
       theme: 'dark',
       greeting: greetingMessage,
       primary_color: primaryColor,
@@ -254,9 +254,28 @@ async function buildWidgetScript(options: WidgetRouterOptions, key: string): Pro
   });
 
   window.addEventListener('message', function(event){
-    if (event && event.data && event.data.type === 'kufu_widget_close') {
+    if (!event || !event.data) return;
+    if (event.data.type === 'kufu_widget_close') {
       open = false;
       sync();
+    }
+    if (event.data.type === 'kufu_widget_logo' && event.data.logoUrl) {
+      var newLogoUrl = event.data.logoUrl;
+      bubble.style.background = '#0f172a';
+      var existingImg = bubble.querySelector('img');
+      if (existingImg) {
+        existingImg.src = newLogoUrl;
+      } else {
+        bubble.textContent = '';
+        var updatedImg = document.createElement('img');
+        updatedImg.src = newLogoUrl;
+        updatedImg.alt = 'Chat logo';
+        updatedImg.style.width = '72%';
+        updatedImg.style.height = '72%';
+        updatedImg.style.objectFit = 'contain';
+        updatedImg.style.pointerEvents = 'none';
+        bubble.appendChild(updatedImg);
+      }
     }
   });
 

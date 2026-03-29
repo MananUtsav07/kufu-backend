@@ -417,11 +417,14 @@ export function createChatRouter(options: ChatRouterOptions): Router {
         }
       }
 
+      const effectiveBusinessName =
+        context.mode === 'widget' ? assistantName : clientBusinessName
+
       const systemPrompt = [
         strictContextInstruction,
         buildSystemPrompt(mergedKnowledge, {
           assistantName,
-          businessName: clientBusinessName,
+          businessName: effectiveBusinessName,
         }),
         ragContext
           ? `Website Context:\n${ragContext}`
