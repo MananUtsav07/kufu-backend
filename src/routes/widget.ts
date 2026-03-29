@@ -6,7 +6,7 @@ import { asyncHandler, AppError } from '../lib/errors.js'
 import { respondValidationError } from '../lib/http.js'
 import { widgetConfigQuerySchema } from '../schemas/api.js'
 import { createSignedStorageUrl, LOGO_BUCKET } from '../services/storageService.js'
-import { loadChatbotByPublicKey, loadClientById } from '../services/tenantService.js'
+import { loadChatbotByPublicKey } from '../services/tenantService.js'
 
 type WidgetRouterOptions = {
   supabaseAdminClient: SupabaseClient
@@ -123,8 +123,6 @@ async function buildWidgetConfigResponse(options: WidgetRouterOptions, key: stri
   if (!chatbot || !chatbot.is_active) {
     throw new AppError('Widget key not found or inactive', 404)
   }
-
-  const client = chatbot.client_id ? await loadClientById(options.supabaseAdminClient, chatbot.client_id) : null
 
   const { data: chatbotSettings, error: chatbotSettingsError } = await options.supabaseAdminClient
     .from('chatbot_settings')
