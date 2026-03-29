@@ -334,7 +334,7 @@ export function createChatRouter(options: ChatRouterOptions): Router {
 
       const shouldUseGlobalKnowledge =
         context.userRole === "admin" &&
-        (context.mode === "dashboard" || context.mode === "widget");
+        context.mode === "dashboard";
 
       const baseKnowledge = shouldUseGlobalKnowledge
         ? await options.dataStore.getKnowledgeText()
