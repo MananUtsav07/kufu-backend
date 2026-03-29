@@ -92,6 +92,54 @@ function findLastUserMessage(
   return "";
 }
 
+function hasAlreadyAskedForLeadInfo(
+  messages: Array<{ role: "user" | "assistant"; content: string }>,
+): boolean {
+  return messages.some(
+    (msg) =>
+      msg.role === "assistant" &&
+      /(?:name|contact|email|phone)/i.test(msg.content) &&
+      /(?:could i get|can i get|may i get|get your|share your|leave your|provide your)/i.test(msg.content),
+  );
+}
+
+function extractNameFromConversation(
+  messages: Array<{ role: "user" | "assistant"; content: string }>,
+): string | null {
+  // After the bot asked for name+contact, look in subsequent user messages for "my name is X" or "I'm X"
+  let botAsked = false
+  for (const msg of messages) {
+    if (
+      msg.role === "assistant" &&
+      /(?:name|contact|email|phone)/i.test(msg.content) &&
+      /(?:could i get|can i get|may i get|get your|share your|leave your|provide your)/i.test(msg.content)
+    ) {
+      botAsked = true
+      continue
+    }
+    if (botAsked && msg.role === "user") {
+      const nameMatch = msg.content.match(
+        /(?:(?:my name is|i(?:'m| am))\s+)([A-Za-z][a-z]+(?:\s+[A-Za-z][a-z]+)*)/i,
+      )
+      if (nameMatch?.[1]) {
+        return nameMatch[1].trim()
+      }
+      // If the bot asked and user replied with just a name before contact info (e.g. "John, john@email.com")
+      const leadingNameMatch = msg.content.match(
+        /^([A-Za-z][a-z]+(?:\s+[A-Za-z][a-z]+)*)\s*[,\s]/,
+      )
+      if (leadingNameMatch?.[1] && leadingNameMatch[1].length >= 2) {
+        const candidate = leadingNameMatch[1].trim()
+        const SKIP = new Set(['hi', 'hey', 'hello', 'yes', 'no', 'ok', 'okay', 'sure', 'my'])
+        if (!SKIP.has(candidate.toLowerCase())) {
+          return candidate
+        }
+      }
+    }
+  }
+  return null
+}
+
 function isDomainAllowed(domain: string | null, allowedDomains: string[]): boolean {
   if (!domain) return true
   if (allowedDomains.length === 0) return true
@@ -420,12 +468,18 @@ export function createChatRouter(options: ChatRouterOptions): Router {
       const effectiveBusinessName =
         context.mode === 'widget' ? assistantName : clientBusinessName
 
+      const alreadyAskedForLeadInfo = hasAlreadyAskedForLeadInfo(sanitizedMessages)
+      const leadCaptureInstruction = alreadyAskedForLeadInfo
+        ? "Lead capture: You have already asked the visitor for their contact details in this conversation. Do NOT ask again."
+        : "Lead capture: If the visitor shows buying intent (asks about pricing, services, booking, plans, or wants to proceed), ask once for their name and either an email address or phone number so the team can follow up. Example: \"To connect you with our team, could I get your name and a contact email or phone number?\" Ask this at most once."
+
       const systemPrompt = [
         strictContextInstruction,
         buildSystemPrompt(mergedKnowledge, {
           assistantName,
           businessName: effectiveBusinessName,
         }),
+        leadCaptureInstruction,
         ragContext
           ? `Website Context:\n${ragContext}`
           : "Website Context:\nNo relevant website context was retrieved.",
@@ -447,10 +501,13 @@ export function createChatRouter(options: ChatRouterOptions): Router {
         completion.choices?.[0]?.message?.content?.trim() ||
         "Sorry - I couldn't generate a response.";
 
+      const conversationName = extractNameFromConversation(sanitizedMessages)
+
       let leadCaptured = false;
       let capturedLeadEmail: string | null = null;
       let capturedLeadPhone: string | null = null;
       let capturedLeadText: string | null = null;
+      let capturedLeadName: string | null = null;
       if (context.clientId) {
         const leadCaptureResult = await upsertLeadFromMessage(
           options.supabaseAdminClient,
@@ -458,9 +515,11 @@ export function createChatRouter(options: ChatRouterOptions): Router {
             clientId: context.clientId,
             content: lastUserMessage,
             sessionId,
+            name: conversationName,
           },
         );
         leadCaptured = leadCaptureResult.captured;
+        capturedLeadName = leadCaptureResult.name;
         capturedLeadEmail = leadCaptureResult.email;
         capturedLeadPhone = leadCaptureResult.phone;
         capturedLeadText = leadCaptureResult.leadText;
@@ -557,6 +616,7 @@ export function createChatRouter(options: ChatRouterOptions): Router {
               chatbotId: context.chatbotId,
               visitorId: sessionId,
               userMessage: lastUserMessage,
+              leadName: capturedLeadName,
               leadEmail: capturedLeadEmail,
               leadPhone: capturedLeadPhone,
               leadText: capturedLeadText,

@@ -53,6 +53,7 @@ type ClientLeadCaptureNotificationPayload = {
   chatbotName: string
   businessName: string
   visitorId: string
+  leadName: string | null
   leadEmail: string | null
   leadPhone: string | null
   leadText: string | null
@@ -300,11 +301,12 @@ export function createMailer(options: MailerOptions) {
       )
     },
     async sendClientLeadCaptureNotification(payload: ClientLeadCaptureNotificationPayload): Promise<void> {
-      const { to, submittedAtIso, chatbotName, businessName, visitorId, leadEmail, leadPhone, leadText, leadMessage } = payload
+      const { to, submittedAtIso, chatbotName, businessName, visitorId, leadName, leadEmail, leadPhone, leadText, leadMessage } = payload
       const safeSubmittedAt = toSafeCell(submittedAtIso)
       const safeBusinessName = toSafeCell(businessName)
       const safeChatbotName = toSafeCell(chatbotName)
       const safeVisitorId = toSafeCell(visitorId)
+      const safeLeadName = toSafeCell(leadName)
       const safeLeadEmail = toSafeCell(leadEmail)
       const safeLeadPhone = toSafeCell(leadPhone)
       const safeLeadText = toSafeCell(leadText)
@@ -320,6 +322,7 @@ export function createMailer(options: MailerOptions) {
               <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Business</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${safeBusinessName}</td></tr>
               <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Chatbot</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${safeChatbotName}</td></tr>
               <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Visitor Session</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${safeVisitorId}</td></tr>
+              <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Lead Name</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${safeLeadName}</td></tr>
               <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Lead Email</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${safeLeadEmail}</td></tr>
               <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Lead Phone</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${safeLeadPhone}</td></tr>
               <tr><td style="padding: 8px; border: 1px solid #e2e8f0; font-weight: 600;">Lead Text</td><td style="padding: 8px; border: 1px solid #e2e8f0;">${safeLeadText}</td></tr>
@@ -342,6 +345,7 @@ export function createMailer(options: MailerOptions) {
             `Business: ${businessName}`,
             `Chatbot: ${chatbotName}`,
             `Visitor Session: ${visitorId}`,
+            `Lead Name: ${leadName || '-'}`,
             `Lead Email: ${leadEmail || '-'}`,
             `Lead Phone: ${leadPhone || '-'}`,
             `Lead Text: ${leadText || '-'}`,

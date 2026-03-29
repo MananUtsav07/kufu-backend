@@ -6,6 +6,8 @@ const phoneMatchRegex = /(?:\+?\d[\d\s\-()]{7,}\d)/i
 const emailReplaceRegex = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi
 const phoneReplaceRegex = /(?:\+?\d[\d\s\-()]{7,}\d)/g
 const demoIntentRegex = /\b(book|schedule|arrange).{0,20}\b(demo|call|meeting)\b|\bdemo\b/i
+const nameIntroRegex = /(?:(?:my name is|i(?:'m| am))\s+)([A-Za-z][a-z]+(?:\s+[A-Za-z][a-z]+)*)/i
+const COMMON_WORDS = new Set(['hi', 'hey', 'hello', 'yes', 'no', 'ok', 'okay', 'sure', 'thanks', 'thank'])
 export const LEAD_CAPTURE_ACKNOWLEDGEMENT = 'Thanks for sharing your details. Our team will contact you shortly.'
 
 export type ClientKnowledgeRow = {
@@ -21,10 +23,12 @@ export type LeadCaptureInput = {
   clientId: string
   content: string
   sessionId: string
+  name?: string | null
 }
 
 export type LeadCaptureResult = {
   captured: boolean
+  name: string | null
   email: string | null
   phone: string | null
   leadText: string | null
@@ -33,6 +37,7 @@ export type LeadCaptureResult = {
 
 type LeadRecord = {
   id: string
+  name: string | null
   email: string | null
   phone: string | null
 }
@@ -143,6 +148,17 @@ function extractLeadText(content: string): string | null {
   return stripped.length > 0 ? stripped : null
 }
 
+function extractName(content: string): string | null {
+  const match = content.match(nameIntroRegex)
+  if (match?.[1]) {
+    const candidate = match[1].trim()
+    if (candidate.length >= 2 && !COMMON_WORDS.has(candidate.toLowerCase())) {
+      return candidate
+    }
+  }
+  return null
+}
+
 function extractFirstEmail(content: string): string | null {
   const matches = content.match(emailMatchRegex)
   if (!matches || matches.length === 0) {
@@ -180,6 +196,7 @@ export async function upsertLeadFromMessage(
 ): Promise<LeadCaptureResult> {
   const email = extractFirstEmail(input.content)
   const phone = extractFirstPhone(input.content)
+  const name = input.name ?? extractName(input.content)
   const hasDemoIntent = demoIntentRegex.test(input.content)
   const extractedLeadText = extractLeadText(input.content)
   const leadText = hasDemoIntent
@@ -191,6 +208,7 @@ export async function upsertLeadFromMessage(
   if (!email && !phone) {
     return {
       captured: false,
+      name: null,
       email: null,
       phone: null,
       leadText: null,
@@ -203,7 +221,7 @@ export async function upsertLeadFromMessage(
   if (email) {
     const { data } = await supabaseAdminClient
       .from('leads')
-      .select('id, email, phone')
+      .select('id, name, email, phone')
       .eq('client_id', input.clientId)
       .eq('email', email)
       .order('created_at', { ascending: false })
@@ -218,7 +236,7 @@ export async function upsertLeadFromMessage(
   if (!existingLead && phone) {
     const { data } = await supabaseAdminClient
       .from('leads')
-      .select('id, email, phone')
+      .select('id, name, email, phone')
       .eq('client_id', input.clientId)
       .eq('phone', phone)
       .order('created_at', { ascending: false })
@@ -234,6 +252,7 @@ export async function upsertLeadFromMessage(
     const { error } = await supabaseAdminClient
       .from('leads')
       .update({
+        name: name ?? existingLead.name ?? null,
         email: email ?? existingLead.email ?? null,
         phone: phone ?? existingLead.phone ?? null,
         need: leadText,
@@ -247,6 +266,7 @@ export async function upsertLeadFromMessage(
 
     return {
       captured: true,
+      name,
       email,
       phone,
       leadText,
@@ -256,6 +276,7 @@ export async function upsertLeadFromMessage(
 
   const { error } = await supabaseAdminClient.from('leads').insert({
     client_id: input.clientId,
+    name,
     email,
     phone,
     need: leadText,
@@ -269,6 +290,7 @@ export async function upsertLeadFromMessage(
 
   return {
     captured: true,
+    name,
     email,
     phone,
     leadText,

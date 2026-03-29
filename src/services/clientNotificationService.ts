@@ -69,6 +69,7 @@ export async function notifyClientOnLeadCapture(args: {
   chatbotId: string
   visitorId: string
   userMessage: string
+  leadName?: string | null
   leadEmail?: string | null
   leadPhone?: string | null
   leadText?: string | null
@@ -92,6 +93,7 @@ export async function notifyClientOnLeadCapture(args: {
     chatbotName: notificationContext.chatbotName,
     businessName: notificationContext.businessName,
     visitorId: args.visitorId,
+    leadName: args.leadName ?? null,
     leadEmail: args.leadEmail ?? null,
     leadPhone: args.leadPhone ?? null,
     leadText: args.leadText ?? null,
