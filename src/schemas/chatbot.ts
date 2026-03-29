@@ -3,7 +3,7 @@ import { z } from 'zod'
 export const chatbotSettingsUpdateSchema = z
   .object({
     bot_name: z.string().trim().min(1).max(200),
-    greeting_message: z.string().trim().min(1).max(2000),
+    greeting_message: z.string().trim().max(2000).optional().default(''),
     primary_color: z
       .string()
       .trim()

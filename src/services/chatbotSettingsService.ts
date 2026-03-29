@@ -49,13 +49,15 @@ export async function upsertChatbotSettings(args: {
   greetingMessage: string
   primaryColor: string
 }): Promise<ChatbotSettingsRow> {
+  const resolvedGreeting = args.greetingMessage.trim() || defaultGreeting(args.botName)
+
   const { data, error } = await args.supabaseAdminClient
     .from('chatbot_settings')
     .upsert(
       {
         chatbot_id: args.chatbot.id,
         bot_name: args.botName,
-        greeting_message: args.greetingMessage,
+        greeting_message: resolvedGreeting,
         primary_color: args.primaryColor,
         updated_at: new Date().toISOString(),
       },
